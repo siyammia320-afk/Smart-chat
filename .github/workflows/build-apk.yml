@@ -29,13 +29,22 @@ jobs:
           echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> "$ANDROID_HOME/licenses/android-sdk-license"
           echo "84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
 
-      - name: Prepare Firebase Config and Keystore
+      - name: Prepare Firebase Config, Env, and Keystore
         run: |
           python3 - << 'PYEOF'
-          import os, json, base64
+          import os, json, base64, shutil
 
           os.makedirs("app/src/main/res/values", exist_ok=True)
 
+          # 1. Ensure .env exists in root and app/ for Secrets Gradle Plugin
+          if not os.path.exists(".env"):
+              if os.path.exists(".env.example"):
+                  shutil.copyfile(".env.example", ".env")
+              else:
+                  with open(".env", "w", encoding="utf-8") as f:
+                      f.write("# Auto-generated .env\n")
+
+          # 2. Generate app/google-services.json
           key_part_1 = "AIza"
           key_part_2 = "SyBRFYac1zvq5QQUrH9UejKuaIB_oGvMqi8"
           api_key = key_part_1 + key_part_2
@@ -94,6 +103,7 @@ jobs:
           with open("app/google-services.json", "w", encoding="utf-8") as f:
               json.dump(google_services, f, indent=2)
 
+          # 3. Ensure firebase_applet_config.xml exists
           xml_path = "app/src/main/res/values/firebase_applet_config.xml"
           if not os.path.exists(xml_path):
               xml_content = """<?xml version="1.0" encoding="utf-8"?>
@@ -105,14 +115,23 @@ jobs:
               with open(xml_path, "w", encoding="utf-8") as f:
                   f.write(xml_content.strip() + "\n")
 
-          b64_keystore = "app/debug.keystore.base64"
-          keystore_path = "app/debug.keystore"
-          if os.path.exists(b64_keystore) and not os.path.exists(keystore_path):
-              with open(b64_keystore, "rb") as f:
-                  raw = f.read()
-              with open(keystore_path, "wb") as f:
-                  f.write(base64.b64decode(raw))
+          # 4. Decode debug.keystore.base64 to root debug.keystore (required by signingConfigs.debugConfig)
+          for b64_candidate in ["debug.keystore.base64", "app/debug.keystore.base64"]:
+              if os.path.exists(b64_candidate):
+                  with open(b64_candidate, "rb") as f:
+                      raw = f.read()
+                  decoded = base64.b64decode(raw)
+                  with open("debug.keystore", "wb") as f:
+                      f.write(decoded)
+                  with open("app/debug.keystore", "wb") as f:
+                      f.write(decoded)
+                  break
           PYEOF
+          if [ ! -f "debug.keystore" ]; then
+            keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            cp debug.keystore app/debug.keystore
+          fi
+          ls -la debug.keystore .env app/google-services.json
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -120,7 +139,7 @@ jobs:
           gradle-version: '9.3.1'
 
       - name: Build Debug APK
-        run: gradle :app:assembleDebug --no-daemon --stacktrace
+        run: gradle :app:assembleDebug --no-daemon
 
       - name: Upload SMART CHAT Debug APK
         uses: actions/upload-artifact@v4
