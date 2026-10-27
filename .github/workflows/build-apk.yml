@@ -2,9 +2,9 @@ name: Build SMART CHAT APK
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "**" ]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [ "**" ]
   workflow_dispatch:
 
 jobs:
@@ -16,58 +16,50 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
+      - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
+          java-version: '17'
           distribution: 'temurin'
-          java-version: '21'
 
-      - name: Configure Android SDK Licenses
+      - name: Accept Android SDK Licenses
         run: |
           mkdir -p "$ANDROID_HOME/licenses"
-          printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_HOME/licenses/android-sdk-license"
-          printf "\n84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
-          printf "\nd975f751698a77b662f1254ddbeed3901e976f5a" > "$ANDROID_HOME/licenses/intel-android-extra-license"
+          echo "24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_HOME/licenses/android-sdk-license"
+          echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> "$ANDROID_HOME/licenses/android-sdk-license"
+          echo "84831b9409646a918e30573bab4c9c91346d8abd" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
 
-      - name: Prepare Debug Keystore for Signing
+      - name: Ensure Firebase Config Files Exist
         run: |
-          if [ ! -f debug.keystore ]; then
-            if [ -f debug.keystore.base64 ]; then
-              base64 -di debug.keystore.base64 > debug.keystore
-            else
-              keytool -genkeypair -v \
-                -keystore debug.keystore \
-                -alias androiddebugkey \
-                -keyalg RSA \
-                -keysize 2048 \
-                -validity 10000 \
-                -storepass android \
-                -keypass android \
-                -dname "CN=Android Debug,O=Android,C=US"
-            fi
+          if [ ! -f "app/google-services.json" ]; then
+            echo "ewogICJwcm9qZWN0X2luZm8iOiB7CiAgICAicHJvamVjdF9udW1iZXIiOiAiNzcwNDM2NjAxNzc1IiwKICAgICJwcm9qZWN0X2lkIjogImdlbi1sYW5nLWNsaWVudC0wNjM2MjY2NzUwIiwKICAgICJzdG9yYWdlX2J1Y2tldCI6ICJnZW4tbGFuZy1jbGllbnQtMDYzNjI2Njc1MC5maXJlYmFzZXN0b3JhZ2UuYXBwIgogIH0sCiAgImNsaWVudCI6IFsKICAgIHsKICAgICAgImNsaWVudF9pbmZvIjogewogICAgICAgICJtb2JpbGVzZGtfYXBwX2lkIjogIjE6NzcwNDM2NjAxNzc1OmFuZHJvaWQ6Zjc5MDM5ZGIyZTNkYTk2ODJkODE1YSIsCiAgICAgICAgImFuZHJvaWRfY2xpZW50X2luZm8iOiB7CiAgICAgICAgICAicGFja2FnZV9uYW1lIjogInNtYXJ0LmNoYXQiCiAgICAgICAgfQogICAgICB9LAogICAgICAib2F1dGhfY2xpZW50IjogWwogICAgICAgIHsKICAgICAgICAgICJjbGllbnRfaWQiOiAiNzcwNDM2NjAxNzc1LXV2YnZhZzJpbXFqZGNobmIwdjF0MW9sZzc1N2d2ZTFvLmFwcHMuZ29vZ2xldXNlcmNvbnRlbnQuY29tIiwKICAgICAgICAgICJjbGllbnRfdHlwZSI6IDEsCiAgICAgICAgICAiYW5kcm9pZF9pbmZvIjogewogICAgICAgICAgICAicGFja2FnZV9uYW1lIjogInNtYXJ0LmNoYXQiLAogICAgICAgICAgICAiY2VydGlmaWNhdGVfaGFzaCI6ICJhNzU1NjQ2MDNiODJiYTIzYzdlNDhlMjU3ODIxNjgzNzg4YTFmNzliIgogICAgICAgICAgfQogICAgICAgIH0sCiAgICAgICAgewogICAgICAgICAgImNsaWVudF9pZCI6ICI3NzA0MzY2MDE3NzUtbTcwN3FrNjl1NTBidmFmb3VxMm5tam82cWVlcmJlZWcuYXBwcy5nb29nbGV1c2VyY29udGVudC5jb20iLAogICAgICAgICAgImNsaWVudF90eXBlIjogMwogICAgICAgIH0KICAgICAgXSwKICAgICAgImFwaV9rZXkiOiBbCiAgICAgICAgewogICAgICAgICAgImN1cnJlbnRfa2V5IjogIkFJemFTeUJSRllhYzF6dnE1UVFVckg5VWVqS3VhSUJfb0d2TXFpOCIKICAgICAgICB9CiAgICAgIF0sCiAgICAgICJzZXJ2aWNlcyI6IHsKICAgICAgICAiYXBwaW52aXRlX3NlcnZpY2UiOiB7CiAgICAgICAgICAib3RoZXJfcGxhdGZvcm1fb2F1dGhfY2xpZW50IjogWwogICAgICAgICAgICB7CiAgICAgICAgICAgICAgImNsaWVudF9pZCI6ICI3NzA0MzY2MDE3NzUtbTcwN3FrNjl1NTBidmFmb3VxMm5tam82cWVlcmJlZWcuYXBwcy5nb29nbGV1c2VyY29udGVudC5jb20iLAogICAgICAgICAgICAgICJjbGllbnRfdHlwZSI6IDMKICAgICAgICAgICAgfQogICAgICAgICAgXQogICAgICAgIH0KICAgICAgfQogICAgfSwKICAgIHsKICAgICAgImNsaWVudF9pbmZvIjogewogICAgICAgICJtb2JpbGVzZGtfYXBwX2lkIjogIjE6NzcwNDM2NjAxNzc1OmFuZHJvaWQ6Zjc5MDM5ZGIyZTNkYTk2ODJkODE1YSIsCiAgICAgICAgImFuZHJvaWRfY2xpZW50X2luZm8iOiB7CiAgICAgICAgICAicGFja2FnZV9uYW1lIjogImNvbS5leGFtcGxlIgogICAgICAgIH0KICAgICAgfSwKICAgICAgIm9hdXRoX2NsaWVudCI6IFsKICAgICAgICB7CiAgICAgICAgICAiY2xpZW50X2lkIjogIjc3MDQzNjYwMTc3NS11dmJ2YWcyaW1xamRjaG5iMHYxdDFvbGc3NTdndmUxby5hcHBzLmdvb2dsZXVzZXJjb250ZW50LmNvbSIsCiAgICAgICAgICAiY2xpZW50X3R5cGUiOiAxLAogICAgICAgICAgImFuZHJvaWRfaW5mbyI6IHsKICAgICAgICAgICAgInBhY2thZ2VfbmFtZSI6ICJjb20uZXhhbXBsZSIsCiAgICAgICAgICAgICJjZXJ0aWZpY2F0ZV9oYXNoIjogImE3NTU2NDYwM2I4MmJhMjNjN2U0OGUyNTc4MjE2ODM3ODhhMWY3OWIiCiAgICAgICAgICB9CiAgICAgICAgfSwKICAgICAgICB7CiAgICAgICAgICAiY2xpZW50X2lkIjogIjc3MDQzNjYwMTc3NS1tNzA3cWs2OXU1MGJ2YWZvdXEybm1qbzZxZWVyYmVlZy5hcHBzLmdvb2dsZXVzZXJjb250ZW50LmNvbSIsCiAgICAgICAgICAiY2xpZW50X3R5cGUiOiAzCiAgICAgICAgfQogICAgICBdLAogICAgICAiYXBpX2tleSI6IFsKICAgICAgICB7CiAgICAgICAgICAiY3VycmVudF9rZXkiOiAiQUl6YVN5QlJGWWFjMXp2cTVRUVVySDlVZWpLdWFJQl9vR3ZNcWk4IgogICAgICAgIH0KICAgICAgXSwKICAgICAgInNlcnZpY2VzI6IHsKICAgICAgICAiYXBwaW52aXRlX3NlcnZpY2UiOiB7CiAgICAgICAgICAib3RoZXJfcGxhdGZvcm1fb2F1dGhfY2xpZW50IjogWwogICAgICAgICAgICB7CiAgICAgICAgICAgICAgImNsaWVudF9pZCI6ICI3NzA0MzY2MDE3NzUtbTcwN3FrNjl1NTBidmFmb3VxMm5tam82cWVlcmJlZWcuYXBwcy5nb29nbGV1c2VyY29udGVudC5jb20iLAogICAgICAgICAgICAgICJjbGllbnRfdHlwZSI6IDMKICAgICAgICAgICAgfQogICAgICAgICAgXQogICAgICAgIH0KICAgICAgfQogICAgfQogIF0sCiAgImNvbmZpZ3VyYXRpb25fdmVyc2lvbiI6ICIxIgp9" | base64 -d > app/google-services.json
+          fi
+          mkdir -p app/src/main/res/values
+          if [ ! -f "app/src/main/res/values/firebase_applet_config.xml" ]; then
+            cat << 'EOF' > app/src/main/res/values/firebase_applet_config.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="firebase_project_id" translatable="false">gen-lang-client-0636266750</string>
+              <string name="firebase_database_id" translatable="false">ai-studio-android-840e1286-d8b0-4357-8b06-707f1248dfd6</string>
+          </resources>
+          EOF
           fi
 
-      - name: Ensure .env File Exists
-        run: |
-          if [ ! -f .env ]; then
-            if [ -f .env.example ]; then
-              cp .env.example .env
-            else
-              touch .env
-            fi
-          fi
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
 
-      - name: Install Gradle 9.3.1
+      - name: Decode Debug Keystore
         run: |
-          curl -sL https://services.gradle.org/distributions/gradle-9.3.1-bin.zip -o /tmp/gradle.zip
-          sudo mkdir -p /opt/gradle
-          sudo unzip -q -o /tmp/gradle.zip -d /opt/gradle
-          echo "/opt/gradle/gradle-9.3.1/bin" >> $GITHUB_PATH
+          if [ -f "app/debug.keystore.base64" ] && [ ! -f "app/debug.keystore" ]; then
+            base64 -d app/debug.keystore.base64 > app/debug.keystore
+          fi
 
       - name: Build Debug APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Upload SMART CHAT APK Artifact
+      - name: Upload SMART CHAT Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: SMART-CHAT-debug-apk
