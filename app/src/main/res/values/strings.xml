@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">SMART CHAT</string>
+    <string name="app_tagline">সুপার ফাস্ট গ্রুপ চ্যাট, ভয়েস মেসেজ ও অডিও কল</string>
+    <string name="sign_in_with_google">Google দিয়ে লগইন / সাইন-আপ করুন</string>
+    <string name="username_label">আপনার ইউজারনেম (Username)</string>
+    <string name="username_placeholder">যেমন: Siyam Ahmed</string>
+    <string name="status_label">স্ট্যাটাস / বায়ো (Status)</string>
+    <string name="pick_profile_photo">গ্যালারি থেকে ছবি নিন</string>
+    <string name="tab_chat">গ্রুপ চ্যাট</string>
+    <string name="tab_call">ভয়েস কল</string>
+    <string name="tab_members">মেম্বার ও অ্যাডমিন</string>
+    <string name="tab_profile">প্রোফাইল ও সেটিংস</string>
+    <string name="message_input_hint">মেসেজ লিখুন...</string>
+    <string name="send_message_desc">মেসেজ পাঠান</string>
+    <string name="record_voice_desc">ভয়েস মেসেজ রেকর্ড করুন</string>
+    <string name="start_call_desc">ভয়েস কল শুরু করুন</string>
+    <string name="admin_badge_label">অ্যাডমিন (Admin)</string>
+    <string name="blocked_banner_text">অ্যাডমিন আপনাকে চ্যাট এবং কল থেকে ব্লক করেছেন।</string>
+    <string name="auto_delete_info">Firebase ফ্রি প্ল্যান সেভার: সব মেসেজ ২৪-৪৮ ঘণ্টা পর অটো ডিলিট হয়।</string>
+</resources>

@@ -1,0 +1,6 @@
+{
+  "name": "SMART CHAT",
+  "description": "Fast, lightweight group chat, voice messaging, and real-time voice calling app with admin moderation and auto-cleaning storage.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

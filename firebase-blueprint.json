@@ -1,0 +1,282 @@
+{
+  "entities": {
+    "AdminRole": {
+      "title": "AdminRole",
+      "description": "Trusted administrator marker document keyed by admin UID.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The UID of the admin user."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when admin document was created via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["userId", "createdAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public group member profile and moderation status (no PII stored).",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "The Firebase Auth UID of the user."
+        },
+        "groupId": {
+          "type": "string",
+          "enum": ["smart_chat_main"],
+          "description": "Group partition identifier for query enforcement."
+        },
+        "username": {
+          "type": "string",
+          "description": "Display username in SMART CHAT (1-40 chars)."
+        },
+        "avatarData": {
+          "type": "string",
+          "description": "Preset avatar key or compressed lightweight Base64 thumbnail."
+        },
+        "statusText": {
+          "type": "string",
+          "description": "Short user bio or status message."
+        },
+        "isBlocked": {
+          "type": "boolean",
+          "description": "Whether the user has been blocked by the Admin."
+        },
+        "isOnline": {
+          "type": "boolean",
+          "description": "Whether the user is currently active in SMART CHAT."
+        },
+        "isAdminBadge": {
+          "type": "boolean",
+          "description": "Whether the user holds the verified Admin badge."
+        },
+        "autoDeleteHours": {
+          "type": "integer",
+          "enum": [24, 48],
+          "description": "Preferred message auto-delete retention window in hours (24 or 48)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp submitted via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp submitted via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "userId",
+        "groupId",
+        "username",
+        "avatarData",
+        "statusText",
+        "isBlocked",
+        "isOnline",
+        "isAdminBadge",
+        "autoDeleteHours",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "A group text, voice note, or admin notice message with automatic 24-48h expiration.",
+      "type": "object",
+      "properties": {
+        "groupId": {
+          "type": "string",
+          "enum": ["smart_chat_main"],
+          "description": "Group partition identifier for query enforcement."
+        },
+        "senderId": {
+          "type": "string",
+          "description": "UID of the user who sent the message."
+        },
+        "senderName": {
+          "type": "string",
+          "description": "Display name of the sender."
+        },
+        "senderAvatar": {
+          "type": "string",
+          "description": "Avatar identifier or lightweight Base64 thumbnail of the sender."
+        },
+        "senderIsAdmin": {
+          "type": "boolean",
+          "description": "True if sent by the verified Admin."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["text", "voice", "notice"],
+          "description": "Message type: text, voice, or notice."
+        },
+        "text": {
+          "type": "string",
+          "description": "Text content of the message or voice note caption."
+        },
+        "audioBase64": {
+          "type": "string",
+          "description": "Base64-encoded compressed audio payload for voice messages."
+        },
+        "audioDurationSec": {
+          "type": "integer",
+          "description": "Duration of the voice message in seconds (0-120)."
+        },
+        "replyToId": {
+          "type": "string",
+          "description": "Optional ID of the message being replied to."
+        },
+        "replyToSender": {
+          "type": "string",
+          "description": "Optional display name of the user being replied to."
+        },
+        "replyToPreview": {
+          "type": "string",
+          "description": "Optional short text preview of the message being replied to."
+        },
+        "ttlHours": {
+          "type": "integer",
+          "enum": [24, 48],
+          "description": "Auto-delete time-to-live in hours (24 or 48) for Free Plan optimization."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp submitted via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp submitted via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "groupId",
+        "senderId",
+        "senderName",
+        "senderAvatar",
+        "senderIsAdmin",
+        "type",
+        "text",
+        "audioBase64",
+        "audioDurationSec",
+        "replyToId",
+        "replyToSender",
+        "replyToPreview",
+        "ttlHours",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "VoiceCallSession": {
+      "title": "VoiceCallSession",
+      "description": "Real-time voice call signaling and live audio room session.",
+      "type": "object",
+      "properties": {
+        "groupId": {
+          "type": "string",
+          "enum": ["smart_chat_main"],
+          "description": "Group partition identifier for query enforcement."
+        },
+        "callerId": {
+          "type": "string",
+          "description": "UID of the user who initiated the call."
+        },
+        "callerName": {
+          "type": "string",
+          "description": "Display name of the caller."
+        },
+        "targetUserId": {
+          "type": "string",
+          "description": "Target recipient UID or 'all' for group voice call."
+        },
+        "targetUserName": {
+          "type": "string",
+          "description": "Display name of target recipient or 'Group Voice Call'."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ringing", "connected", "ended"],
+          "description": "Call lifecycle state. 'ended' is terminal."
+        },
+        "sdpOffer": {
+          "type": "string",
+          "description": "WebRTC SDP offer or signaling handshake payload."
+        },
+        "sdpAnswer": {
+          "type": "string",
+          "description": "WebRTC SDP answer payload."
+        },
+        "latestAudioChunk": {
+          "type": "string",
+          "description": "Base64 compressed PCM/AMR audio frame for real-time voice relay."
+        },
+        "latestAudioSpeakerId": {
+          "type": "string",
+          "description": "UID of the participant who transmitted the latest audio frame."
+        },
+        "participantCount": {
+          "type": "integer",
+          "description": "Number of active participants in the voice call."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation server timestamp submitted via FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update server timestamp submitted via FieldValue.serverTimestamp()."
+        }
+      },
+      "required": [
+        "groupId",
+        "callerId",
+        "callerName",
+        "targetUserId",
+        "targetUserName",
+        "status",
+        "sdpOffer",
+        "sdpAnswer",
+        "latestAudioChunk",
+        "latestAudioSpeakerId",
+        "participantCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/admins/{adminUid}": {
+      "schema": {
+        "$ref": "#/entities/AdminRole"
+      },
+      "description": "Admin role lookup collection."
+    },
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Group member profiles and block status."
+    },
+    "/messages/{messageId}": {
+      "schema": {
+        "$ref": "#/entities/ChatMessage"
+      },
+      "description": "Group chat text messages, voice notes, and pinned admin notices."
+    },
+    "/calls/{callId}": {
+      "schema": {
+        "$ref": "#/entities/VoiceCallSession"
+      },
+      "description": "Real-time voice call signaling and audio relay sessions."
+    }
+  }
+}

@@ -1,0 +1,260 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Global Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        ('email' in request.auth.token &&
+         'email_verified' in request.auth.token &&
+         request.auth.token.email == 'siyammia320@gmail.com' &&
+         request.auth.token.email_verified == true) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function hasActiveProfile() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isBlocked == false;
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidAdminRole(data) {
+      return data.userId is string && isValidId(data.userId) &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    function isValidUserProfile(data) {
+      return data.userId is string && isValidId(data.userId) &&
+             data.groupId is string && data.groupId.size() <= 64 && data.groupId == 'smart_chat_main' &&
+             data.username is string && data.username.size() >= 1 && data.username.size() <= 40 &&
+             data.avatarData is string && data.avatarData.size() <= 25000 &&
+             data.statusText is string && data.statusText.size() <= 120 &&
+             data.isBlocked is bool &&
+             data.isOnline is bool &&
+             data.isAdminBadge is bool &&
+             data.autoDeleteHours is int && (data.autoDeleteHours == 24 || data.autoDeleteHours == 48) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidChatMessage(data) {
+      return data.groupId is string && data.groupId.size() <= 64 && data.groupId == 'smart_chat_main' &&
+             data.senderId is string && isValidId(data.senderId) &&
+             data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 40 &&
+             data.senderAvatar is string && data.senderAvatar.size() <= 25000 &&
+             data.senderIsAdmin is bool &&
+             data.type is string && data.type.size() <= 16 && (data.type == 'text' || data.type == 'voice' || data.type == 'notice') &&
+             data.text is string && data.text.size() <= 2000 &&
+             data.audioBase64 is string && data.audioBase64.size() <= 300000 &&
+             data.audioDurationSec is int && data.audioDurationSec >= 0 && data.audioDurationSec <= 120 &&
+             data.replyToId is string && data.replyToId.size() <= 128 &&
+             data.replyToSender is string && data.replyToSender.size() <= 40 &&
+             data.replyToPreview is string && data.replyToPreview.size() <= 200 &&
+             data.ttlHours is int && (data.ttlHours == 24 || data.ttlHours == 48) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidVoiceCallSession(data) {
+      return data.groupId is string && data.groupId.size() <= 64 && data.groupId == 'smart_chat_main' &&
+             data.callerId is string && isValidId(data.callerId) &&
+             data.callerName is string && data.callerName.size() >= 1 && data.callerName.size() <= 40 &&
+             data.targetUserId is string && data.targetUserId.size() >= 1 && data.targetUserId.size() <= 128 &&
+             data.targetUserName is string && data.targetUserName.size() >= 1 && data.targetUserName.size() <= 40 &&
+             data.status is string && data.status.size() <= 16 && (data.status == 'ringing' || data.status == 'connected' || data.status == 'ended') &&
+             data.sdpOffer is string && data.sdpOffer.size() <= 20000 &&
+             data.sdpAnswer is string && data.sdpAnswer.size() <= 20000 &&
+             data.latestAudioChunk is string && data.latestAudioChunk.size() <= 60000 &&
+             data.latestAudioSpeakerId is string && data.latestAudioSpeakerId.size() <= 128 &&
+             data.participantCount is int && data.participantCount >= 0 && data.participantCount <= 50 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // 4. Collection Rules: /admins/{adminUid}
+    match /admins/{adminUid} {
+      allow get: if isSignedIn() && isValidId(adminUid) && (request.auth.uid == adminUid || isAdmin());
+      allow list: if isSignedIn() && existing().userId == request.auth.uid;
+      allow create: if isSignedIn() &&
+                       isValidId(adminUid) &&
+                       request.auth.uid == adminUid &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll(['userId', 'createdAt']) &&
+                       incoming().keys().hasOnly(['userId', 'createdAt']) &&
+                       isValidAdminRole(incoming()) &&
+                       isAdmin();
+      allow update, delete: if false;
+    }
+
+    // 5. Collection Rules: /users/{userId}
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || existing().groupId == 'smart_chat_main');
+      allow list: if isSignedIn() && existing().groupId == 'smart_chat_main';
+
+      allow create: if isSignedIn() &&
+                       isValidId(userId) &&
+                       request.auth.uid == userId &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll([
+                         'userId', 'groupId', 'username', 'avatarData', 'statusText',
+                         'isBlocked', 'isOnline', 'isAdminBadge', 'autoDeleteHours',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'groupId', 'username', 'avatarData', 'statusText',
+                         'isBlocked', 'isOnline', 'isAdminBadge', 'autoDeleteHours',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().isBlocked == false &&
+                       (incoming().isAdminBadge == false || isAdmin());
+
+      allow update: if isSignedIn() &&
+                       isValidId(userId) &&
+                       isValidUserProfile(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().groupId == existing().groupId &&
+                       incoming().createdAt == existing().createdAt && (
+                         // Action 1: Owner updates own profile fields (cannot self-unblock or forge admin badge)
+                         (
+                           request.auth.uid == userId &&
+                           incoming().isBlocked == existing().isBlocked &&
+                           (incoming().isAdminBadge == existing().isAdminBadge || isAdmin()) &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'username', 'avatarData', 'statusText', 'isOnline', 'isAdminBadge', 'autoDeleteHours', 'updatedAt'
+                           ])
+                         ) ||
+                         // Action 2: Admin blocks/unblocks user or moderates profile
+                         (
+                           isAdmin() &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'isBlocked', 'statusText', 'isAdminBadge', 'autoDeleteHours', 'updatedAt'
+                           ])
+                         )
+                       );
+
+      allow delete: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+    }
+
+    // 6. Collection Rules: /messages/{messageId}
+    match /messages/{messageId} {
+      allow get: if isSignedIn() && isValidId(messageId) && existing().groupId == 'smart_chat_main';
+      allow list: if isSignedIn() && existing().groupId == 'smart_chat_main';
+
+      allow create: if isSignedIn() &&
+                       isValidId(messageId) &&
+                       incoming().senderId == request.auth.uid &&
+                       incoming().keys().hasAll([
+                         'groupId', 'senderId', 'senderName', 'senderAvatar', 'senderIsAdmin',
+                         'type', 'text', 'audioBase64', 'audioDurationSec',
+                         'replyToId', 'replyToSender', 'replyToPreview',
+                         'ttlHours', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'groupId', 'senderId', 'senderName', 'senderAvatar', 'senderIsAdmin',
+                         'type', 'text', 'audioBase64', 'audioDurationSec',
+                         'replyToId', 'replyToSender', 'replyToPreview',
+                         'ttlHours', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidChatMessage(incoming()) &&
+                       (incoming().senderIsAdmin == false || isAdmin()) &&
+                       (incoming().type != 'notice' || isAdmin()) &&
+                       hasActiveProfile();
+
+      allow update: if isSignedIn() &&
+                       isValidId(messageId) &&
+                       isValidChatMessage(incoming()) &&
+                       incoming().senderId == existing().senderId &&
+                       incoming().groupId == existing().groupId &&
+                       incoming().createdAt == existing().createdAt && (
+                         (
+                           request.auth.uid == existing().senderId &&
+                           incoming().senderIsAdmin == existing().senderIsAdmin &&
+                           incoming().type == existing().type &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['text', 'updatedAt']) &&
+                           hasActiveProfile()
+                         ) ||
+                         (
+                           isAdmin() &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['text', 'type', 'updatedAt'])
+                         )
+                       );
+
+      allow delete: if isSignedIn() &&
+                       isValidId(messageId) && (
+                         existing().senderId == request.auth.uid ||
+                         isAdmin() ||
+                         request.time > existing().createdAt + duration.value(24, 'h')
+                       );
+    }
+
+    // 7. Collection Rules: /calls/{callId}
+    match /calls/{callId} {
+      allow get: if isSignedIn() && isValidId(callId) && existing().groupId == 'smart_chat_main';
+      allow list: if isSignedIn() && existing().groupId == 'smart_chat_main';
+
+      allow create: if isSignedIn() &&
+                       isValidId(callId) &&
+                       incoming().callerId == request.auth.uid &&
+                       incoming().keys().hasAll([
+                         'groupId', 'callerId', 'callerName', 'targetUserId', 'targetUserName',
+                         'status', 'sdpOffer', 'sdpAnswer', 'latestAudioChunk',
+                         'latestAudioSpeakerId', 'participantCount', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'groupId', 'callerId', 'callerName', 'targetUserId', 'targetUserName',
+                         'status', 'sdpOffer', 'sdpAnswer', 'latestAudioChunk',
+                         'latestAudioSpeakerId', 'participantCount', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidVoiceCallSession(incoming()) &&
+                       incoming().status != 'ended' &&
+                       hasActiveProfile();
+
+      allow update: if isSignedIn() &&
+                       isValidId(callId) &&
+                       isValidVoiceCallSession(incoming()) &&
+                       incoming().callerId == existing().callerId &&
+                       incoming().groupId == existing().groupId &&
+                       incoming().createdAt == existing().createdAt &&
+                       (existing().status != 'ended' || isAdmin()) && (
+                         (
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'status', 'sdpOffer', 'sdpAnswer', 'latestAudioChunk',
+                             'latestAudioSpeakerId', 'participantCount', 'updatedAt'
+                           ]) &&
+                           hasActiveProfile()
+                         ) ||
+                         isAdmin()
+                       );
+
+      allow delete: if isSignedIn() &&
+                       isValidId(callId) && (
+                         existing().callerId == request.auth.uid ||
+                         isAdmin() ||
+                         existing().status == 'ended'
+                       );
+    }
+  }
+}
