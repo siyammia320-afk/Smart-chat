@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
@@ -35,14 +34,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -64,6 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -73,6 +70,9 @@ import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import com.example.R
+import com.example.data.model.AccountSessionManager
+import com.example.data.model.hashEmailPassword
+import com.example.data.repository.SmartChatRepository
 import com.example.util.AudioHelper
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
@@ -84,7 +84,6 @@ import com.google.firebase.auth.auth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
-import java.security.MessageDigest
 
 // Exact HTML CSS color tokens
 private val HtmlBg = Color(0xFF0B0D12)
@@ -126,11 +125,6 @@ val PRESET_AVATARS = listOf(
 
 private const val ACCOUNT_PREFS_NAME = "smart_chat_account_prefs"
 
-private fun hashPassword(password: String): String {
-    val bytes = MessageDigest.getInstance("SHA-256").digest(password.toByteArray(Charsets.UTF_8))
-    return bytes.joinToString("") { "%02x".format(it) }
-}
-
 fun attemptAutoSignIn(
     context: Context,
     credentialManager: CredentialManager,
@@ -138,7 +132,8 @@ fun attemptAutoSignIn(
     onUnauthenticated: () -> Unit,
     scope: CoroutineScope
 ) {
-    if (Firebase.auth.currentUser != null) {
+    AccountSessionManager.init(context)
+    if (AccountSessionManager.currentSession != null || Firebase.auth.currentUser != null) {
         onAuthSuccess()
         return
     }
@@ -221,6 +216,7 @@ fun signOut(
     onSignOutComplete: () -> Unit,
     scope: CoroutineScope
 ) {
+    AccountSessionManager.clearSession(context)
     Firebase.auth.signOut()
     scope.launch {
         try {
@@ -320,7 +316,7 @@ fun AuthScreen(
     onAuthSuccess: (OnboardingPreferences) -> Unit
 ) {
     val context = LocalContext.current
-    val credentialManager = remember { CredentialManager.create(context) }
+    val repository = remember(context) { SmartChatRepository(context) }
     val scope = rememberCoroutineScope()
     val sharedPrefs = remember(context) {
         context.getSharedPreferences(ACCOUNT_PREFS_NAME, Context.MODE_PRIVATE)
@@ -357,34 +353,6 @@ fun AuthScreen(
                 messageText = "Please choose a valid JPG, PNG, or WebP image."
             }
         }
-    }
-
-    LaunchedEffect(Unit) {
-        attemptAutoSignIn(
-            context = context,
-            credentialManager = credentialManager,
-            onAuthSuccess = {
-                val savedName = sharedPrefs.getString("full_name", "") ?: ""
-                val savedUser = sharedPrefs.getString("username", "") ?: ""
-                val savedAvatar = sharedPrefs.getString("avatar_data", "avatar_indigo") ?: "avatar_indigo"
-                val displayUsername = when {
-                    savedName.isNotBlank() -> savedName
-                    savedUser.isNotBlank() -> savedUser
-                    else -> ""
-                }
-                val statusHandle = if (savedUser.isNotBlank()) "@${savedUser.removePrefix("@")}" else "SMART CHAT মেম্বার"
-                onAuthSuccess(
-                    OnboardingPreferences(
-                        username = displayUsername,
-                        avatarData = savedAvatar,
-                        statusText = statusHandle,
-                        autoDeleteHours = autoDeleteHours
-                    )
-                )
-            },
-            onUnauthenticated = {},
-            scope = scope
-        )
     }
 
     Box(
@@ -621,7 +589,7 @@ fun AuthScreen(
 
                         Spacer(modifier = Modifier.height(21.dp))
 
-                        // Primary Button: Create Account
+                        // Primary Button: Create Account (Direct Email/Password — NO Google popup)
                         Button(
                             onClick = {
                                 val trimmedName = fullName.trim()
@@ -648,38 +616,32 @@ fun AuthScreen(
                                     else -> {
                                         messageText = null
                                         isLoading = true
-                                        sharedPrefs.edit()
-                                            .putString("full_name", trimmedName)
-                                            .putString("username", cleanUser)
-                                            .putString("email", trimmedEmail)
-                                            .putString("password_hash", hashPassword(signupPassword))
-                                            .putString("avatar_data", avatarData)
-                                            .apply()
-
-                                        onGoogleSignInClicked(
-                                            context = context,
-                                            credentialManager = credentialManager,
-                                            onAuthSuccess = {
-                                                isLoading = false
+                                        val passHash = hashEmailPassword(trimmedEmail, signupPassword)
+                                        scope.launch {
+                                            val result = repository.registerEmailAccount(
+                                                fullName = trimmedName,
+                                                usernameHandle = cleanUser,
+                                                email = trimmedEmail,
+                                                passwordHash = passHash,
+                                                avatarData = avatarData,
+                                                autoDeleteHours = autoDeleteHours
+                                            )
+                                            isLoading = false
+                                            result.onSuccess { session ->
+                                                AccountSessionManager.saveSession(context, session, passHash)
                                                 onAuthSuccess(
                                                     OnboardingPreferences(
-                                                        username = trimmedName,
-                                                        avatarData = avatarData,
-                                                        statusText = "@$cleanUser",
-                                                        autoDeleteHours = autoDeleteHours
+                                                        username = session.fullName,
+                                                        avatarData = session.avatarData,
+                                                        statusText = "@${session.username}",
+                                                        autoDeleteHours = session.autoDeleteHours
                                                     )
                                                 )
-                                            },
-                                            onAuthError = { msg ->
-                                                isLoading = false
+                                            }.onFailure { err ->
                                                 isSuccessMessage = false
-                                                messageText = msg
-                                            },
-                                            scope = scope,
-                                            onAuthCancelled = {
-                                                isLoading = false
+                                                messageText = err.localizedMessage ?: "Account creation failed. Please try again."
                                             }
-                                        )
+                                        }
                                     }
                                 }
                             },
@@ -687,7 +649,7 @@ fun AuthScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(48.dp)
-                                .testTag("google_sign_in_button"),
+                                .testTag("create_account_button"),
                             shape = RoundedCornerShape(10.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = HtmlAccent,
@@ -770,7 +732,7 @@ fun AuthScreen(
 
                         Spacer(modifier = Modifier.height(21.dp))
 
-                        // Primary Button: Login to Account
+                        // Primary Button: Login to Account (Direct Email/Password — NO Google popup)
                         Button(
                             onClick = {
                                 val trimmedEmail = loginEmail.trim().lowercase()
@@ -784,53 +746,30 @@ fun AuthScreen(
                                         messageText = "Please enter your password."
                                     }
                                     else -> {
-                                        val savedEmail = sharedPrefs.getString("email", "")
-                                        val savedHash = sharedPrefs.getString("password_hash", "")
-                                        if (!savedEmail.isNullOrBlank() &&
-                                            savedEmail == trimmedEmail &&
-                                            !savedHash.isNullOrBlank() &&
-                                            savedHash != hashPassword(loginPassword)
-                                        ) {
-                                            isSuccessMessage = false
-                                            messageText = "Incorrect password. Please try again."
-                                            return@Button
-                                        }
-
                                         messageText = null
                                         isLoading = true
-                                        sharedPrefs.edit()
-                                            .putString("email", trimmedEmail)
-                                            .putString("password_hash", hashPassword(loginPassword))
-                                            .apply()
-
-                                        onGoogleSignInClicked(
-                                            context = context,
-                                            credentialManager = credentialManager,
-                                            onAuthSuccess = {
-                                                isLoading = false
-                                                val savedName = sharedPrefs.getString("full_name", "") ?: ""
-                                                val savedUser = sharedPrefs.getString("username", "") ?: ""
-                                                val savedAvatar = sharedPrefs.getString("avatar_data", "avatar_indigo") ?: "avatar_indigo"
-                                                val fallbackName = trimmedEmail.substringBefore("@")
+                                        val passHash = hashEmailPassword(trimmedEmail, loginPassword)
+                                        scope.launch {
+                                            val result = repository.loginEmailAccount(
+                                                email = trimmedEmail,
+                                                passwordHash = passHash
+                                            )
+                                            isLoading = false
+                                            result.onSuccess { session ->
+                                                AccountSessionManager.saveSession(context, session, passHash)
                                                 onAuthSuccess(
                                                     OnboardingPreferences(
-                                                        username = savedName.ifBlank { fallbackName },
-                                                        avatarData = savedAvatar,
-                                                        statusText = if (savedUser.isNotBlank()) "@$savedUser" else "@$fallbackName",
-                                                        autoDeleteHours = autoDeleteHours
+                                                        username = session.fullName,
+                                                        avatarData = session.avatarData,
+                                                        statusText = "@${session.username}",
+                                                        autoDeleteHours = session.autoDeleteHours
                                                     )
                                                 )
-                                            },
-                                            onAuthError = { msg ->
-                                                isLoading = false
+                                            }.onFailure { err ->
                                                 isSuccessMessage = false
-                                                messageText = msg
-                                            },
-                                            scope = scope,
-                                            onAuthCancelled = {
-                                                isLoading = false
+                                                messageText = err.localizedMessage ?: "Login failed. Please check your email and password."
                                             }
-                                        )
+                                        }
                                     }
                                 }
                             },
@@ -838,7 +777,7 @@ fun AuthScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(48.dp)
-                                .testTag("google_sign_in_button"),
+                                .testTag("login_account_button"),
                             shape = RoundedCornerShape(10.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = HtmlAccent,
@@ -936,7 +875,7 @@ private fun HtmlFormField(
                 )
             },
             singleLine = true,
-            visualTransformation = if (isPassword) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+            visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
             keyboardOptions = KeyboardOptions(
                 keyboardType = keyboardType,
                 imeAction = imeAction

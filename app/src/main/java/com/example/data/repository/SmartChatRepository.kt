@@ -2,11 +2,16 @@ package com.example.data.repository
 
 import android.content.Context
 import com.example.R
-import com.example.data.model.ADMIN_EMAIL
+import com.example.data.model. ADMIN_EMAIL
+import com.example.data.model.ADMIN_USER_ID
+import com.example.data.model.AccountSession
+import com.example.data.model.AccountSessionManager
 import com.example.data.model.ChatMessage
 import com.example.data.model.GROUP_ID
+import com.example.data.model.LIVE_EMAIL_GROUP_ID
 import com.example.data.model.UserProfile
 import com.example.data.model.VoiceCallSession
+import com.example.data.model.emailToUserId
 import com.example.data.remote.OperationType
 import com.example.data.remote.handleFirestoreError
 import com.google.firebase.Firebase
@@ -26,23 +31,181 @@ import kotlinx.coroutines.tasks.await
 
 class SmartChatRepository(
     private val db: FirebaseFirestore,
-    private val auth: FirebaseAuth = Firebase.auth
+    private val auth: FirebaseAuth = Firebase.auth,
+    private val activeGroupId: String = GROUP_ID
 ) {
     // Convenience constructor using custom database ID from firebase_applet_config.xml
     constructor(context: Context) : this(
-        FirebaseFirestore.getInstance(
+        db = FirebaseFirestore.getInstance(
             context.applicationContext.getString(R.string.firestore_database_id)
-        )
+        ),
+        auth = Firebase.auth,
+        activeGroupId = LIVE_EMAIL_GROUP_ID
     )
 
+    private fun currentUidOrNull(): String? {
+        return auth.currentUser?.uid ?: AccountSessionManager.currentSession?.userId
+    }
+
     private fun requireUserId(): String {
-        return auth.currentUser?.uid
+        return currentUidOrNull()
             ?: throw IllegalStateException("User must be signed in before accessing Firestore.")
     }
 
     fun isCurrentUserAdmin(): Boolean {
-        val email = auth.currentUser?.email?.lowercase()?.trim()
-        return email == ADMIN_EMAIL
+        val email = (auth.currentUser?.email ?: AccountSessionManager.currentSession?.email)
+            ?.lowercase()?.trim()
+        val uid = currentUidOrNull()
+        return email == ADMIN_EMAIL || uid == ADMIN_USER_ID
+    }
+
+    suspend fun registerEmailAccount(
+        fullName: String,
+        usernameHandle: String,
+        email: String,
+        passwordHash: String,
+        avatarData: String,
+        autoDeleteHours: Long = 24L
+    ): Result<AccountSession> {
+        val normalizedEmail = email.trim().lowercase()
+        val uid = emailToUserId(normalizedEmail)
+        val cleanHandle = usernameHandle.trim().removePrefix("@").take(24)
+        val cleanName = fullName.trim().take(40).ifBlank { cleanHandle }
+        val isAdmin = normalizedEmail == ADMIN_EMAIL || uid == ADMIN_USER_ID
+
+        val accountRef = db.collection("accounts").document(uid)
+        val userRef = db.collection("users").document(uid)
+
+        return try {
+            val existingAcc = accountRef.get().await()
+            if (existingAcc.exists()) {
+                val existingHash = existingAcc.getString("passwordHash") ?: ""
+                if (existingHash.isNotBlank() && existingHash != passwordHash) {
+                    return Result.failure(
+                        IllegalArgumentException("An account with this email already exists. Please login instead.")
+                    )
+                }
+            } else {
+                val accPayload = mapOf(
+                    "userId" to uid,
+                    "fullName" to cleanName,
+                    "username" to cleanHandle,
+                    "passwordHash" to passwordHash,
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+                accountRef.set(accPayload).await()
+            }
+
+            val newProfile = UserProfile(
+                id = uid,
+                userId = uid,
+                groupId = activeGroupId,
+                username = cleanName,
+                avatarData = avatarData.take(25000).ifBlank { "avatar_indigo" },
+                statusText = "@$cleanHandle",
+                isBlocked = false,
+                isOnline = true,
+                isAdminBadge = isAdmin,
+                autoDeleteHours = if (autoDeleteHours == 48L) 48L else 24L
+            )
+            userRef.set(newProfile.toCreateMap()).await()
+
+            Result.success(
+                AccountSession(
+                    userId = uid,
+                    email = normalizedEmail,
+                    fullName = cleanName,
+                    username = cleanHandle,
+                    avatarData = newProfile.avatarData,
+                    autoDeleteHours = newProfile.autoDeleteHours
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, accountRef.path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun loginEmailAccount(
+        email: String,
+        passwordHash: String
+    ): Result<AccountSession> {
+        val normalizedEmail = email.trim().lowercase()
+        val uid = emailToUserId(normalizedEmail)
+        val accountRef = db.collection("accounts").document(uid)
+        val userRef = db.collection("users").document(uid)
+
+        return try {
+            val accSnap = accountRef.get().await()
+            if (!accSnap.exists()) {
+                return Result.failure(
+                    IllegalArgumentException("No account found with this email. Please Sign Up first.")
+                )
+            }
+            val storedHash = accSnap.getString("passwordHash") ?: ""
+            if (storedHash != passwordHash) {
+                return Result.failure(
+                    IllegalArgumentException("Incorrect password. Please try again.")
+                )
+            }
+
+            val fullName = accSnap.getString("fullName") ?: normalizedEmail.substringBefore("@")
+            val handle = accSnap.getString("username") ?: normalizedEmail.substringBefore("@")
+
+            val userSnap = userRef.get().await()
+            val avatarData = if (userSnap.exists()) {
+                userSnap.getString("avatarData") ?: "avatar_indigo"
+            } else {
+                "avatar_indigo"
+            }
+            val autoDeleteHours = if (userSnap.exists()) {
+                userSnap.getLong("autoDeleteHours") ?: 24L
+            } else {
+                24L
+            }
+
+            if (userSnap.exists()) {
+                userRef.update(
+                    mapOf(
+                        "isOnline" to true,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            } else {
+                val isAdmin = normalizedEmail == ADMIN_EMAIL || uid == ADMIN_USER_ID
+                val profile = UserProfile(
+                    id = uid,
+                    userId = uid,
+                    groupId = activeGroupId,
+                    username = fullName.take(40),
+                    avatarData = avatarData,
+                    statusText = "@$handle",
+                    isBlocked = false,
+                    isOnline = true,
+                    isAdminBadge = isAdmin,
+                    autoDeleteHours = if (autoDeleteHours == 48L) 48L else 24L
+                )
+                userRef.set(profile.toCreateMap()).await()
+            }
+
+            Result.success(
+                AccountSession(
+                    userId = uid,
+                    email = normalizedEmail,
+                    fullName = fullName,
+                    username = handle,
+                    avatarData = avatarData,
+                    autoDeleteHours = autoDeleteHours
+                )
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.GET, accountRef.path)
+            Result.failure(e)
+        }
     }
 
     suspend fun ensureUserProfile(
@@ -53,6 +216,7 @@ class SmartChatRepository(
     ): Result<UserProfile> {
         val uid = requireUserId()
         val user = auth.currentUser
+        val session = AccountSessionManager.currentSession
         val isAdmin = isCurrentUserAdmin()
         val docRef = db.collection("users").document(uid)
 
@@ -62,7 +226,7 @@ class SmartChatRepository(
                 val existing = snapshot.toObject(
                     UserProfile::class.java,
                     DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                ) ?: UserProfile(id = uid, userId = uid)
+                ) ?: UserProfile(id = uid, userId = uid, groupId = activeGroupId)
 
                 val updatedUsername = customUsername?.takeIf { it.isNotBlank() } ?: existing.username
                 val updatedAvatar = customAvatar?.takeIf { it.isNotBlank() } ?: existing.avatarData
@@ -90,6 +254,7 @@ class SmartChatRepository(
                 )
             } else {
                 val fallbackName = customUsername?.takeIf { it.isNotBlank() }
+                    ?: session?.fullName?.takeIf { it.isNotBlank() }
                     ?: user?.displayName?.takeIf { it.isNotBlank() }
                     ?: user?.email?.substringBefore("@")?.takeIf { it.isNotBlank() }
                     ?: "Member_${uid.take(5)}"
@@ -97,9 +262,9 @@ class SmartChatRepository(
                 val newProfile = UserProfile(
                     id = uid,
                     userId = uid,
-                    groupId = GROUP_ID,
+                    groupId = activeGroupId,
                     username = fallbackName.take(40),
-                    avatarData = (customAvatar ?: "avatar_emerald").take(25000),
+                    avatarData = (customAvatar ?: session?.avatarData ?: "avatar_emerald").take(25000),
                     statusText = (customStatus ?: if (isAdmin) "SMART CHAT অ্যাডমিন" else "SMART CHAT মেম্বার").take(120),
                     isBlocked = false,
                     isOnline = true,
@@ -186,7 +351,7 @@ class SmartChatRepository(
     fun observeGroupMembers(): Flow<List<UserProfile>> {
         val path = "users"
         return db.collection(path)
-            .whereEqualTo("groupId", GROUP_ID)
+            .whereEqualTo("groupId", activeGroupId)
             .snapshots()
             .map { snapshot ->
                 snapshot.toObjects(
@@ -226,7 +391,7 @@ class SmartChatRepository(
     fun observeGroupMessages(): Flow<List<ChatMessage>> {
         val path = "messages"
         return db.collection(path)
-            .whereEqualTo("groupId", GROUP_ID)
+            .whereEqualTo("groupId", activeGroupId)
             .snapshots()
             .map { snapshot ->
                 snapshot.toObjects(
@@ -252,7 +417,7 @@ class SmartChatRepository(
 
         val message = ChatMessage(
             id = messageId,
-            groupId = GROUP_ID,
+            groupId = activeGroupId,
             senderId = uid,
             senderName = senderProfile.username.ifBlank { "Member" },
             senderAvatar = senderProfile.avatarData,
@@ -290,7 +455,7 @@ class SmartChatRepository(
 
         val message = ChatMessage(
             id = messageId,
-            groupId = GROUP_ID,
+            groupId = activeGroupId,
             senderId = uid,
             senderName = senderProfile.username.ifBlank { "Member" },
             senderAvatar = senderProfile.avatarData,
@@ -327,15 +492,11 @@ class SmartChatRepository(
         }
     }
 
-    /**
-     * Automatically deletes messages older than their configured TTL (24h or 48h)
-     * or deletes all messages when triggered by the Admin to keep Firebase Free Plan clean.
-     */
     suspend fun cleanupExpiredMessages(
         messages: List<ChatMessage>,
         forceDeleteAllForAdmin: Boolean = false
     ): Int {
-        val uid = auth.currentUser?.uid ?: return 0
+        val uid = currentUidOrNull() ?: return 0
         val isAdmin = isCurrentUserAdmin()
         val nowSeconds = Timestamp.now().seconds
         var deletedCount = 0
@@ -365,7 +526,7 @@ class SmartChatRepository(
     fun observeActiveCalls(): Flow<List<VoiceCallSession>> {
         val path = "calls"
         return db.collection(path)
-            .whereEqualTo("groupId", GROUP_ID)
+            .whereEqualTo("groupId", activeGroupId)
             .snapshots()
             .map { snapshot ->
                 snapshot.toObjects(
@@ -390,7 +551,7 @@ class SmartChatRepository(
         val docRef = db.collection("calls").document(callId)
         val session = VoiceCallSession(
             id = callId,
-            groupId = GROUP_ID,
+            groupId = activeGroupId,
             callerId = uid,
             callerName = callerProfile.username.ifBlank { "Member" },
             targetUserId = targetUserId.ifBlank { "all" },

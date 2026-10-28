@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -15,6 +16,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.data.model.AccountSessionManager
 import com.example.ui.auth.AuthScreen
 import com.example.ui.auth.OnboardingPreferences
 import com.example.ui.auth.signOut
@@ -63,11 +65,16 @@ fun AppNavigation(
     val scope = rememberCoroutineScope()
     val credentialManager = remember { CredentialManager.create(context) }
 
+    LaunchedEffect(context) {
+        AccountSessionManager.init(context)
+    }
+
     val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
+    val accountSession by AccountSessionManager.sessionFlow.collectAsStateWithLifecycle()
     var onboardingPrefs by remember { mutableStateOf<OnboardingPreferences?>(null) }
 
-    val user = currentUser
-    if (user == null) {
+    val activeUserId = accountSession?.userId ?: currentUser?.uid
+    if (activeUserId == null) {
         AuthScreen(
             onAuthSuccess = { prefs ->
                 onboardingPrefs = prefs
@@ -75,8 +82,8 @@ fun AppNavigation(
         )
     } else {
         val chatViewModel: SmartChatViewModel = viewModel(
-            key = user.uid,
-            factory = SmartChatViewModel.factory(user.uid)
+            key = activeUserId,
+            factory = SmartChatViewModel.factory(activeUserId)
         )
         SmartChatMainScreen(
             viewModel = chatViewModel,

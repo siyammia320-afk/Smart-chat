@@ -1,14 +1,99 @@
 package com.example.data.model
 
+import android.content.Context
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.IgnoreExtraProperties
 import com.google.firebase.firestore.PropertyName
 import com.google.firebase.firestore.ServerTimestamp
+import java.security.MessageDigest
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 const val GROUP_ID = "smart_chat_main"
+const val LIVE_EMAIL_GROUP_ID = "smart_chat_live"
 const val ADMIN_EMAIL = "siyammia320@gmail.com"
+
+fun emailToUserId(email: String): String {
+    val normalized = email.trim().lowercase()
+    val bytes = MessageDigest.getInstance("SHA-256").digest(normalized.toByteArray(Charsets.UTF_8))
+    val hex = bytes.take(12).joinToString("") { "%02x".format(it) }
+    return "usr_$hex"
+}
+
+fun hashEmailPassword(email: String, password: String): String {
+    val raw = "${email.trim().lowercase()}::smart_chat_v1::$password"
+    val bytes = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray(Charsets.UTF_8))
+    return bytes.joinToString("") { "%02x".format(it) }
+}
+
+val ADMIN_USER_ID: String = emailToUserId(ADMIN_EMAIL)
+
+data class AccountSession(
+    val userId: String,
+    val email: String,
+    val fullName: String,
+    val username: String,
+    val avatarData: String,
+    val autoDeleteHours: Long = 24L
+)
+
+object AccountSessionManager {
+    private const val PREF_NAME = "smart_chat_account_prefs"
+    private const val KEY_ACTIVE_USER_ID = "active_user_id"
+    private const val KEY_EMAIL = "email"
+    private const val KEY_FULL_NAME = "full_name"
+    private const val KEY_USERNAME = "username"
+    private const val KEY_AVATAR = "avatar_data"
+    private const val KEY_AUTO_DELETE = "auto_delete_hours"
+
+    private val _sessionFlow = MutableStateFlow<AccountSession?>(null)
+    val sessionFlow: StateFlow<AccountSession?> = _sessionFlow.asStateFlow()
+
+    val currentSession: AccountSession?
+        get() = _sessionFlow.value
+
+    fun init(context: Context) {
+        if (_sessionFlow.value != null) return
+        val prefs = context.applicationContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        val activeUid = prefs.getString(KEY_ACTIVE_USER_ID, null)
+        val email = prefs.getString(KEY_EMAIL, null)
+        if (!activeUid.isNullOrBlank() && !email.isNullOrBlank()) {
+            _sessionFlow.value = AccountSession(
+                userId = activeUid,
+                email = email,
+                fullName = prefs.getString(KEY_FULL_NAME, "") ?: "",
+                username = prefs.getString(KEY_USERNAME, "") ?: "",
+                avatarData = prefs.getString(KEY_AVATAR, "avatar_indigo") ?: "avatar_indigo",
+                autoDeleteHours = prefs.getLong(KEY_AUTO_DELETE, 24L)
+            )
+        }
+    }
+
+    fun saveSession(context: Context, session: AccountSession, passwordHash: String? = null) {
+        val prefs = context.applicationContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        val editor = prefs.edit()
+            .putString(KEY_ACTIVE_USER_ID, session.userId)
+            .putString(KEY_EMAIL, session.email.trim().lowercase())
+            .putString(KEY_FULL_NAME, session.fullName)
+            .putString(KEY_USERNAME, session.username)
+            .putString(KEY_AVATAR, session.avatarData)
+            .putLong(KEY_AUTO_DELETE, session.autoDeleteHours)
+        if (!passwordHash.isNullOrBlank()) {
+            editor.putString("password_hash", passwordHash)
+        }
+        editor.apply()
+        _sessionFlow.value = session
+    }
+
+    fun clearSession(context: Context) {
+        val prefs = context.applicationContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        prefs.edit().remove(KEY_ACTIVE_USER_ID).apply()
+        _sessionFlow.value = null
+    }
+}
 
 @IgnoreExtraProperties
 data class UserProfile(

@@ -12,6 +12,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isEmailAccountId(id) {
+      return id is string && id.size() == 28 && id.matches('^usr_[a-f0-9]{24}$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -39,15 +43,33 @@ service cloud.firestore {
              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isBlocked == false;
     }
 
+    function hasActiveEmailProfile(uid) {
+      return isEmailAccountId(uid) &&
+             exists(/databases/$(database)/documents/users/$(uid)) &&
+             get(/databases/$(database)/documents/users/$(uid)).data.isBlocked == false;
+    }
+
     // 3. Entity Validation Blueprints
     function isValidAdminRole(data) {
       return data.userId is string && isValidId(data.userId) &&
              data.createdAt is timestamp && data.createdAt <= request.time;
     }
 
+    function isValidEmailAccount(data) {
+      return data.userId is string && isEmailAccountId(data.userId) &&
+             data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 60 &&
+             data.username is string && data.username.size() >= 3 && data.username.size() <= 24 &&
+             data.passwordHash is string && data.passwordHash.size() == 64 &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    function isValidGroupId(gid) {
+      return gid is string && gid.size() <= 64 && (gid == 'smart_chat_main' || gid == 'smart_chat_live');
+    }
+
     function isValidUserProfile(data) {
       return data.userId is string && isValidId(data.userId) &&
-             data.groupId is string && data.groupId.size() <= 64 && data.groupId == 'smart_chat_main' &&
+             isValidGroupId(data.groupId) &&
              data.username is string && data.username.size() >= 1 && data.username.size() <= 40 &&
              data.avatarData is string && data.avatarData.size() <= 25000 &&
              data.statusText is string && data.statusText.size() <= 120 &&
@@ -60,7 +82,7 @@ service cloud.firestore {
     }
 
     function isValidChatMessage(data) {
-      return data.groupId is string && data.groupId.size() <= 64 && data.groupId == 'smart_chat_main' &&
+      return isValidGroupId(data.groupId) &&
              data.senderId is string && isValidId(data.senderId) &&
              data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 40 &&
              data.senderAvatar is string && data.senderAvatar.size() <= 25000 &&
@@ -78,7 +100,7 @@ service cloud.firestore {
     }
 
     function isValidVoiceCallSession(data) {
-      return data.groupId is string && data.groupId.size() <= 64 && data.groupId == 'smart_chat_main' &&
+      return isValidGroupId(data.groupId) &&
              data.callerId is string && isValidId(data.callerId) &&
              data.callerName is string && data.callerName.size() >= 1 && data.callerName.size() <= 40 &&
              data.targetUserId is string && data.targetUserId.size() >= 1 && data.targetUserId.size() <= 128 &&
@@ -93,7 +115,19 @@ service cloud.firestore {
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
 
-    // 4. Collection Rules: /admins/{adminUid}
+    // 4. Collection Rules: /accounts/{accountId} (Direct Email/Password Accounts)
+    match /accounts/{accountId} {
+      allow get: if isEmailAccountId(accountId);
+      allow list: if false;
+      allow create: if isEmailAccountId(accountId) &&
+                       incoming().userId == accountId &&
+                       incoming().keys().hasAll(['userId', 'fullName', 'username', 'passwordHash', 'createdAt']) &&
+                       incoming().keys().hasOnly(['userId', 'fullName', 'username', 'passwordHash', 'createdAt']) &&
+                       isValidEmailAccount(incoming());
+      allow update, delete: if false;
+    }
+
+    // 5. Collection Rules: /admins/{adminUid}
     match /admins/{adminUid} {
       allow get: if isSignedIn() && isValidId(adminUid) && (request.auth.uid == adminUid || isAdmin());
       allow list: if isSignedIn() && existing().userId == request.auth.uid;
@@ -108,15 +142,15 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // 5. Collection Rules: /users/{userId}
+    // 6. Collection Rules: /users/{userId}
     match /users/{userId} {
-      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || existing().groupId == 'smart_chat_main');
-      allow list: if isSignedIn() && existing().groupId == 'smart_chat_main';
+      allow get: if (isSignedIn() && isValidId(userId) && (request.auth.uid == userId || existing().groupId == 'smart_chat_main')) ||
+                    isEmailAccountId(userId);
+      allow list: if (isSignedIn() && existing().groupId == 'smart_chat_main') ||
+                     existing().groupId == 'smart_chat_live';
 
-      allow create: if isSignedIn() &&
-                       isValidId(userId) &&
-                       request.auth.uid == userId &&
-                       incoming().userId == request.auth.uid &&
+      allow create: if isValidId(userId) &&
+                       incoming().userId == userId &&
                        incoming().keys().hasAll([
                          'userId', 'groupId', 'username', 'avatarData', 'statusText',
                          'isBlocked', 'isOnline', 'isAdminBadge', 'autoDeleteHours',
@@ -128,17 +162,18 @@ service cloud.firestore {
                          'createdAt', 'updatedAt'
                        ]) &&
                        isValidUserProfile(incoming()) &&
-                       incoming().isBlocked == false &&
-                       (incoming().isAdminBadge == false || isAdmin());
+                       incoming().isBlocked == false && (
+                         (isSignedIn() && request.auth.uid == userId && incoming().groupId == 'smart_chat_main' && (incoming().isAdminBadge == false || isAdmin())) ||
+                         (isEmailAccountId(userId) && incoming().groupId == 'smart_chat_live')
+                       );
 
-      allow update: if isSignedIn() &&
-                       isValidId(userId) &&
+      allow update: if isValidId(userId) &&
                        isValidUserProfile(incoming()) &&
                        incoming().userId == existing().userId &&
                        incoming().groupId == existing().groupId &&
                        incoming().createdAt == existing().createdAt && (
-                         // Action 1: Owner updates own profile fields (cannot self-unblock or forge admin badge)
                          (
+                           isSignedIn() &&
                            request.auth.uid == userId &&
                            incoming().isBlocked == existing().isBlocked &&
                            (incoming().isAdminBadge == existing().isAdminBadge || isAdmin()) &&
@@ -146,26 +181,36 @@ service cloud.firestore {
                              'username', 'avatarData', 'statusText', 'isOnline', 'isAdminBadge', 'autoDeleteHours', 'updatedAt'
                            ])
                          ) ||
-                         // Action 2: Admin blocks/unblocks user or moderates profile
                          (
+                           isSignedIn() &&
                            isAdmin() &&
                            incoming().diff(existing()).affectedKeys().hasOnly([
                              'isBlocked', 'statusText', 'isAdminBadge', 'autoDeleteHours', 'updatedAt'
                            ])
+                         ) ||
+                         (
+                           isEmailAccountId(userId) &&
+                           existing().groupId == 'smart_chat_live' &&
+                           incoming().diff(existing()).affectedKeys().hasOnly([
+                             'username', 'avatarData', 'statusText', 'isBlocked', 'isOnline', 'isAdminBadge', 'autoDeleteHours', 'updatedAt'
+                           ])
                          )
                        );
 
-      allow delete: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow delete: if (isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin())) ||
+                       (isEmailAccountId(userId) && existing().groupId == 'smart_chat_live');
     }
 
-    // 6. Collection Rules: /messages/{messageId}
+    // 7. Collection Rules: /messages/{messageId}
     match /messages/{messageId} {
-      allow get: if isSignedIn() && isValidId(messageId) && existing().groupId == 'smart_chat_main';
-      allow list: if isSignedIn() && existing().groupId == 'smart_chat_main';
+      allow get: if isValidId(messageId) && (
+                    (isSignedIn() && existing().groupId == 'smart_chat_main') ||
+                    existing().groupId == 'smart_chat_live'
+                  );
+      allow list: if (isSignedIn() && existing().groupId == 'smart_chat_main') ||
+                     existing().groupId == 'smart_chat_live';
 
-      allow create: if isSignedIn() &&
-                       isValidId(messageId) &&
-                       incoming().senderId == request.auth.uid &&
+      allow create: if isValidId(messageId) &&
                        incoming().keys().hasAll([
                          'groupId', 'senderId', 'senderName', 'senderAvatar', 'senderIsAdmin',
                          'type', 'text', 'audioBase64', 'audioDurationSec',
@@ -178,18 +223,28 @@ service cloud.firestore {
                          'replyToId', 'replyToSender', 'replyToPreview',
                          'ttlHours', 'createdAt', 'updatedAt'
                        ]) &&
-                       isValidChatMessage(incoming()) &&
-                       (incoming().senderIsAdmin == false || isAdmin()) &&
-                       (incoming().type != 'notice' || isAdmin()) &&
-                       hasActiveProfile();
+                       isValidChatMessage(incoming()) && (
+                         (
+                           isSignedIn() &&
+                           incoming().groupId == 'smart_chat_main' &&
+                           incoming().senderId == request.auth.uid &&
+                           (incoming().senderIsAdmin == false || isAdmin()) &&
+                           (incoming().type != 'notice' || isAdmin()) &&
+                           hasActiveProfile()
+                         ) ||
+                         (
+                           incoming().groupId == 'smart_chat_live' &&
+                           hasActiveEmailProfile(incoming().senderId)
+                         )
+                       );
 
-      allow update: if isSignedIn() &&
-                       isValidId(messageId) &&
+      allow update: if isValidId(messageId) &&
                        isValidChatMessage(incoming()) &&
                        incoming().senderId == existing().senderId &&
                        incoming().groupId == existing().groupId &&
                        incoming().createdAt == existing().createdAt && (
                          (
+                           isSignedIn() &&
                            request.auth.uid == existing().senderId &&
                            incoming().senderIsAdmin == existing().senderIsAdmin &&
                            incoming().type == existing().type &&
@@ -197,27 +252,39 @@ service cloud.firestore {
                            hasActiveProfile()
                          ) ||
                          (
+                           isSignedIn() &&
                            isAdmin() &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['text', 'type', 'updatedAt'])
+                         ) ||
+                         (
+                           existing().groupId == 'smart_chat_live' &&
+                           hasActiveEmailProfile(existing().senderId) &&
                            incoming().diff(existing()).affectedKeys().hasOnly(['text', 'type', 'updatedAt'])
                          )
                        );
 
-      allow delete: if isSignedIn() &&
-                       isValidId(messageId) && (
-                         existing().senderId == request.auth.uid ||
-                         isAdmin() ||
-                         request.time > existing().createdAt + duration.value(24, 'h')
-                       );
+      allow delete: if isValidId(messageId) && (
+                       (
+                         isSignedIn() && (
+                           existing().senderId == request.auth.uid ||
+                           isAdmin() ||
+                           request.time > existing().createdAt + duration.value(24, 'h')
+                         )
+                       ) ||
+                       existing().groupId == 'smart_chat_live'
+                     );
     }
 
-    // 7. Collection Rules: /calls/{callId}
+    // 8. Collection Rules: /calls/{callId}
     match /calls/{callId} {
-      allow get: if isSignedIn() && isValidId(callId) && existing().groupId == 'smart_chat_main';
-      allow list: if isSignedIn() && existing().groupId == 'smart_chat_main';
+      allow get: if isValidId(callId) && (
+                    (isSignedIn() && existing().groupId == 'smart_chat_main') ||
+                    existing().groupId == 'smart_chat_live'
+                  );
+      allow list: if (isSignedIn() && existing().groupId == 'smart_chat_main') ||
+                     existing().groupId == 'smart_chat_live';
 
-      allow create: if isSignedIn() &&
-                       isValidId(callId) &&
-                       incoming().callerId == request.auth.uid &&
+      allow create: if isValidId(callId) &&
                        incoming().keys().hasAll([
                          'groupId', 'callerId', 'callerName', 'targetUserId', 'targetUserName',
                          'status', 'sdpOffer', 'sdpAnswer', 'latestAudioChunk',
@@ -229,32 +296,49 @@ service cloud.firestore {
                          'latestAudioSpeakerId', 'participantCount', 'createdAt', 'updatedAt'
                        ]) &&
                        isValidVoiceCallSession(incoming()) &&
-                       incoming().status != 'ended' &&
-                       hasActiveProfile();
+                       incoming().status != 'ended' && (
+                         (isSignedIn() && incoming().groupId == 'smart_chat_main' && incoming().callerId == request.auth.uid && hasActiveProfile()) ||
+                         (incoming().groupId == 'smart_chat_live' && hasActiveEmailProfile(incoming().callerId))
+                       );
 
-      allow update: if isSignedIn() &&
-                       isValidId(callId) &&
+      allow update: if isValidId(callId) &&
                        isValidVoiceCallSession(incoming()) &&
                        incoming().callerId == existing().callerId &&
                        incoming().groupId == existing().groupId &&
-                       incoming().createdAt == existing().createdAt &&
-                       (existing().status != 'ended' || isAdmin()) && (
+                       incoming().createdAt == existing().createdAt && (
                          (
+                           isSignedIn() &&
+                           existing().groupId == 'smart_chat_main' &&
+                           (existing().status != 'ended' || isAdmin()) && (
+                             (
+                               incoming().diff(existing()).affectedKeys().hasOnly([
+                                 'status', 'sdpOffer', 'sdpAnswer', 'latestAudioChunk',
+                                 'latestAudioSpeakerId', 'participantCount', 'updatedAt'
+                               ]) &&
+                               hasActiveProfile()
+                             ) ||
+                             isAdmin()
+                           )
+                         ) ||
+                         (
+                           existing().groupId == 'smart_chat_live' &&
                            incoming().diff(existing()).affectedKeys().hasOnly([
                              'status', 'sdpOffer', 'sdpAnswer', 'latestAudioChunk',
                              'latestAudioSpeakerId', 'participantCount', 'updatedAt'
-                           ]) &&
-                           hasActiveProfile()
-                         ) ||
-                         isAdmin()
+                           ])
+                         )
                        );
 
-      allow delete: if isSignedIn() &&
-                       isValidId(callId) && (
-                         existing().callerId == request.auth.uid ||
-                         isAdmin() ||
-                         existing().status == 'ended'
-                       );
+      allow delete: if isValidId(callId) && (
+                       (
+                         isSignedIn() && (
+                           existing().callerId == request.auth.uid ||
+                           isAdmin() ||
+                           existing().status == 'ended'
+                         )
+                       ) ||
+                       existing().groupId == 'smart_chat_live'
+                     );
     }
   }
 }
