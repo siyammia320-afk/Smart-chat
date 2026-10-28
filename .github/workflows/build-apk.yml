@@ -103,17 +103,15 @@ jobs:
           with open("app/google-services.json", "w", encoding="utf-8") as f:
               json.dump(google_services, f, indent=2)
 
-          # 3. Ensure firebase_applet_config.xml exists
+          # 3. Ensure firebase_applet_config.xml has the exact firestore_database_id
           xml_path = "app/src/main/res/values/firebase_applet_config.xml"
-          if not os.path.exists(xml_path):
-              xml_content = """<?xml version="1.0" encoding="utf-8"?>
+          xml_content = """<?xml version="1.0" encoding="utf-8"?>
           <resources>
-              <string name="firebase_project_id" translatable="false">gen-lang-client-0636266750</string>
-              <string name="firebase_database_id" translatable="false">ai-studio-android-840e1286-d8b0-4357-8b06-707f1248dfd6</string>
+              <string name="firestore_database_id" translatable="false">ai-studio-android-840e1286-d8b0-4357-8b06-707f1248dfd6</string>
           </resources>
           """
-              with open(xml_path, "w", encoding="utf-8") as f:
-                  f.write(xml_content.strip() + "\n")
+          with open(xml_path, "w", encoding="utf-8") as f:
+              f.write(xml_content.strip() + "\n")
 
           # 4. Decode debug.keystore.base64 to root debug.keystore (required by signingConfigs.debugConfig)
           for b64_candidate in ["debug.keystore.base64", "app/debug.keystore.base64"]:

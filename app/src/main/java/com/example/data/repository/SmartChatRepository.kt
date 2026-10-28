@@ -38,13 +38,15 @@ class SmartChatRepository(
     constructor(context: Context) : this(
         db = FirebaseFirestore.getInstance(
             context.applicationContext.getString(R.string.firestore_database_id)
+                .takeIf { it.isNotBlank() && !it.startsWith("remixed") }
+                ?: "ai-studio-android-840e1286-d8b0-4357-8b06-707f1248dfd6"
         ),
         auth = Firebase.auth,
         activeGroupId = LIVE_EMAIL_GROUP_ID
     )
 
     private fun currentUidOrNull(): String? {
-        return auth.currentUser?.uid ?: AccountSessionManager.currentSession?.userId
+        return AccountSessionManager.currentSession?.userId ?: auth.currentUser?.uid
     }
 
     private fun requireUserId(): String {
@@ -53,7 +55,7 @@ class SmartChatRepository(
     }
 
     fun isCurrentUserAdmin(): Boolean {
-        val email = (auth.currentUser?.email ?: AccountSessionManager.currentSession?.email)
+        val email = (AccountSessionManager.currentSession?.email ?: auth.currentUser?.email)
             ?.lowercase()?.trim()
         val uid = currentUidOrNull()
         return email == ADMIN_EMAIL || uid == ADMIN_USER_ID
@@ -96,19 +98,36 @@ class SmartChatRepository(
                 accountRef.set(accPayload).await()
             }
 
-            val newProfile = UserProfile(
-                id = uid,
-                userId = uid,
-                groupId = activeGroupId,
-                username = cleanName,
-                avatarData = avatarData.take(25000).ifBlank { "avatar_indigo" },
-                statusText = "@$cleanHandle",
-                isBlocked = false,
-                isOnline = true,
-                isAdminBadge = isAdmin,
-                autoDeleteHours = if (autoDeleteHours == 48L) 48L else 24L
-            )
-            userRef.set(newProfile.toCreateMap()).await()
+            val finalAvatar = avatarData.take(25000).ifBlank { "avatar_indigo" }
+            val finalTtl = if (autoDeleteHours == 48L) 48L else 24L
+            val existingUser = userRef.get().await()
+            if (existingUser.exists()) {
+                userRef.update(
+                    mapOf(
+                        "username" to cleanName,
+                        "avatarData" to finalAvatar,
+                        "statusText" to "@$cleanHandle",
+                        "isOnline" to true,
+                        "isAdminBadge" to isAdmin,
+                        "autoDeleteHours" to finalTtl,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            } else {
+                val newProfile = UserProfile(
+                    id = uid,
+                    userId = uid,
+                    groupId = activeGroupId,
+                    username = cleanName,
+                    avatarData = finalAvatar,
+                    statusText = "@$cleanHandle",
+                    isBlocked = false,
+                    isOnline = true,
+                    isAdminBadge = isAdmin,
+                    autoDeleteHours = finalTtl
+                )
+                userRef.set(newProfile.toCreateMap()).await()
+            }
 
             Result.success(
                 AccountSession(
@@ -116,8 +135,8 @@ class SmartChatRepository(
                     email = normalizedEmail,
                     fullName = cleanName,
                     username = cleanHandle,
-                    avatarData = newProfile.avatarData,
-                    autoDeleteHours = newProfile.autoDeleteHours
+                    avatarData = finalAvatar,
+                    autoDeleteHours = finalTtl
                 )
             )
         } catch (e: CancellationException) {

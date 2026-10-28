@@ -470,7 +470,9 @@ private fun FlatTopHeaderBar(
                                 text = "SMART CHAT",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = MaterialTheme.colorScheme.primary
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                softWrap = false
                             )
                             if (isSuperAdmin) {
                                 Spacer(modifier = Modifier.width(6.dp))
@@ -485,7 +487,9 @@ private fun FlatTopHeaderBar(
                                         text = "ADMIN",
                                         color = AdminGold,
                                         style = MaterialTheme.typography.labelSmall,
-                                        fontWeight = FontWeight.Bold
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        softWrap = false
                                     )
                                 }
                             }

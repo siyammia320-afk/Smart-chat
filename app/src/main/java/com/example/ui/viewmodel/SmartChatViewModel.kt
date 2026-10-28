@@ -303,9 +303,7 @@ class SmartChatViewModel(
                 val app = checkNotNull(this[APPLICATION_KEY]) {
                     "APPLICATION_KEY missing from CreationExtras"
                 }
-                val databaseId = app.getString(R.string.firestore_database_id)
-                val db = FirebaseFirestore.getInstance(databaseId)
-                SmartChatViewModel(SmartChatRepository(db), currentUserId)
+                SmartChatViewModel(SmartChatRepository(app), currentUserId)
             }
         }
     }

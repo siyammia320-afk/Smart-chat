@@ -67,13 +67,15 @@ fun AppNavigation(
 
     LaunchedEffect(context) {
         AccountSessionManager.init(context)
+        if (AccountSessionManager.currentSession == null && auth.currentUser != null) {
+            auth.signOut()
+        }
     }
 
-    val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
     val accountSession by AccountSessionManager.sessionFlow.collectAsStateWithLifecycle()
     var onboardingPrefs by remember { mutableStateOf<OnboardingPreferences?>(null) }
 
-    val activeUserId = accountSession?.userId ?: currentUser?.uid
+    val activeUserId = accountSession?.userId
     if (activeUserId == null) {
         AuthScreen(
             onAuthSuccess = { prefs ->
