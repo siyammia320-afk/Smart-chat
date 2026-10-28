@@ -66,7 +66,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.data.model.ADMIN_EMAIL
 import com.example.data.model.UserProfile
 import com.example.ui.auth.OnboardingPreferences
 import com.example.ui.auth.UserAvatarView
@@ -273,7 +272,7 @@ fun SmartChatMainScreen(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "অ্যাডমিন ($ADMIN_EMAIL) আপনাকে চ্যাট এবং ভয়েস কল থেকে ব্লক করেছেন।",
+                                    text = "অ্যাডমিন আপনাকে চ্যাট এবং ভয়েস কল থেকে ব্লক করেছেন।",
                                     color = DangerRed,
                                     style = MaterialTheme.typography.bodySmall,
                                     fontWeight = FontWeight.Bold

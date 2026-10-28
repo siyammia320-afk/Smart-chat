@@ -68,7 +68,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.data.model.ADMIN_EMAIL
 import com.example.data.model.UserProfile
 import com.example.data.model.VoiceCallSession
 import com.example.ui.auth.PRESET_AVATARS
@@ -461,9 +460,9 @@ fun MembersAndAdminSection(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = if (isSuperAdmin) {
-                            "সুপার অ্যাডমিন প্যানেল সক্রিয় ($ADMIN_EMAIL)"
+                            "সুপার অ্যাডমিন প্যানেল সক্রিয়"
                         } else {
-                            "গ্রুপ অ্যাডমিন: $ADMIN_EMAIL"
+                            "গ্রুপ মেম্বার ও মডারেশন"
                         },
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
@@ -683,16 +682,70 @@ fun ProfileAndStorageSection(
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
         ) {
             Column(
-                modifier = Modifier.padding(20.dp),
+                modifier = Modifier.padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                Box(
+                    modifier = Modifier
+                        .size(55.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0xFF242034))
+                        .border(1.dp, Color(0xFF48405E), RoundedCornerShape(16.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "✦",
+                        color = Color(0xFFA78BFA),
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Your Profile",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Account details",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(18.dp))
+
                 UserAvatarView(
                     avatarData = avatarData,
-                    username = username.ifBlank { "S" },
-                    sizeDp = 76,
+                    username = username.ifBlank { "U" },
+                    sizeDp = 100,
                     isOnline = true
                 )
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Text(
+                    text = username.ifBlank { "User" },
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = if (statusText.startsWith("@")) statusText else "@${username.lowercase().replace(" ", "_")}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(0xFFC4B5FD)
+                )
+                val savedEmail = remember(context) {
+                    context.getSharedPreferences("smart_chat_account_prefs", android.content.Context.MODE_PRIVATE)
+                        .getString("email", "") ?: ""
+                }
+                if (savedEmail.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = savedEmail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(modifier = Modifier.height(14.dp))
 
                 OutlinedButton(
                     onClick = {

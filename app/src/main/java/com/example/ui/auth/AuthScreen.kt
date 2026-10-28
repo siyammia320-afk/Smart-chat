@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -29,28 +30,17 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AdminPanelSettings
-import androidx.compose.material.icons.filled.AutoDelete
-import androidx.compose.material.icons.filled.Call
-import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.Chat
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Login
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -63,13 +53,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -79,7 +73,6 @@ import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import com.example.R
-import com.example.data.model.ADMIN_EMAIL
 import com.example.util.AudioHelper
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
@@ -91,21 +84,52 @@ import com.google.firebase.auth.auth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import java.security.MessageDigest
+
+// Exact HTML CSS color tokens
+private val HtmlBg = Color(0xFF0B0D12)
+private val HtmlPanel = Color(0xFF12151D)
+private val HtmlField = Color(0xFF191D27)
+private val HtmlText = Color(0xFFF4F5F9)
+private val HtmlMuted = Color(0xFF939BAD)
+private val HtmlAccent = Color(0xFFA78BFA)
+private val HtmlBorder = Color(0xFF292E3B)
+private val HtmlLogoBg = Color(0xFF242034)
+private val HtmlLogoBorder = Color(0xFF48405E)
+private val HtmlTabsBg = Color(0xFF0C0F15)
+private val HtmlActiveTabBg = Color(0xFF29243B)
+private val HtmlActiveTabText = Color(0xFFD7C8FF)
+private val HtmlLabel = Color(0xFFDCE0E9)
+private val HtmlPlaceholder = Color(0xFF70798C)
+private val HtmlAvatarBorder = Color(0xFF414657)
+private val HtmlAvatarLabel = Color(0xFFC6B5FF)
+private val HtmlPrimaryBorder = Color(0xFFC4B5FD)
+private val HtmlPrimaryText = Color(0xFF171123)
+private val HtmlErrorText = Color(0xFFFFAAAA)
+private val HtmlSuccessText = Color(0xFFA7F3D0)
+private val HtmlFooterText = Color(0xFF727B8E)
 
 data class OnboardingPreferences(
     val username: String = "",
-    val avatarData: String = "avatar_emerald",
+    val avatarData: String = "avatar_indigo",
     val statusText: String = "SMART CHAT মেম্বার",
     val autoDeleteHours: Long = 24L
 )
 
 val PRESET_AVATARS = listOf(
+    "avatar_indigo" to Color(0xFFA78BFA),
     "avatar_emerald" to Color(0xFF10B981),
     "avatar_cyan" to Color(0xFF06B6D4),
     "avatar_amber" to Color(0xFFF59E0B),
-    "avatar_rose" to Color(0xFFF43F5E),
-    "avatar_indigo" to Color(0xFF6366F1)
+    "avatar_rose" to Color(0xFFF43F5E)
 )
+
+private const val ACCOUNT_PREFS_NAME = "smart_chat_account_prefs"
+
+private fun hashPassword(password: String): String {
+    val bytes = MessageDigest.getInstance("SHA-256").digest(password.toByteArray(Charsets.UTF_8))
+    return bytes.joinToString("") { "%02x".format(it) }
+}
 
 fun attemptAutoSignIn(
     context: Context,
@@ -162,7 +186,7 @@ fun onGoogleSignInClicked(
     val clientId = try {
         context.getString(R.string.default_web_client_id)
     } catch (e: Exception) {
-        onAuthError("Google Sign-In configuration missing: default_web_client_id not found")
+        onAuthError("Configuration missing: default_web_client_id not found")
         return
     }
 
@@ -182,11 +206,11 @@ fun onGoogleSignInClicked(
                 onAuthError("Unexpected credential type")
             }
         } catch (e: GetCredentialCancellationException) {
-            Log.w("Auth", "Google Sign-In flow cancelled or dismissed: ${e.message}", e)
+            Log.w("Auth", "Sign-In flow cancelled or dismissed: ${e.message}", e)
             onAuthCancelled()
         } catch (e: Exception) {
-            Log.e("Auth", "Google Sign-In failed", e)
-            onAuthError(e.localizedMessage ?: "Sign in failed")
+            Log.e("Auth", "Sign-In failed", e)
+            onAuthError(e.localizedMessage ?: "Authentication failed")
         }
     }
 }
@@ -210,6 +234,28 @@ fun signOut(
 }
 
 @Composable
+fun DefaultPurpleAvatarSvg(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.background(HtmlLogoBg)) {
+        val w = size.width
+        val h = size.height
+        // Matches SVG: <circle cx='50' cy='36' r='18' fill='#a78bfa'/>
+        drawCircle(
+            color = HtmlAccent,
+            radius = w * 0.18f,
+            center = Offset(w * 0.50f, h * 0.36f)
+        )
+        // Matches SVG: <path d='M16 95 Q18 60 50 60 Q82 60 84 95' fill='#a78bfa'/>
+        val bodyPath = Path().apply {
+            moveTo(w * 0.16f, h * 0.95f)
+            quadraticTo(w * 0.18f, h * 0.60f, w * 0.50f, h * 0.60f)
+            quadraticTo(w * 0.82f, h * 0.60f, w * 0.84f, h * 0.95f)
+            close()
+        }
+        drawPath(path = bodyPath, color = HtmlAccent)
+    }
+}
+
+@Composable
 fun UserAvatarView(
     avatarData: String,
     username: String,
@@ -217,37 +263,45 @@ fun UserAvatarView(
     isOnline: Boolean = false
 ) {
     val bitmap = remember(avatarData) { AudioHelper.decodeBase64Bitmap(avatarData) }
-    val presetColor = PRESET_AVATARS.find { it.first == avatarData }?.second ?: Color(0xFF10B981)
-    val initial = username.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "S"
+    val presetColor = PRESET_AVATARS.find { it.first == avatarData }?.second
+    val initial = username.trim().removePrefix("@").firstOrNull()?.uppercaseChar()?.toString() ?: "U"
 
     Box(modifier = Modifier.size(sizeDp.dp), contentAlignment = Alignment.Center) {
         if (bitmap != null) {
             Image(
                 bitmap = bitmap.asImageBitmap(),
-                contentDescription = "$username এর প্রোফাইল ছবি",
+                contentDescription = "$username profile picture",
                 modifier = Modifier
                     .fillMaxSize()
                     .clip(CircleShape)
-                    .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
+                    .border(1.dp, HtmlAvatarBorder, CircleShape),
                 contentScale = ContentScale.Crop
             )
-        } else {
+        } else if (presetColor != null && avatarData != "avatar_indigo") {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .clip(CircleShape)
                     .background(presetColor)
-                    .border(1.dp, MaterialTheme.colorScheme.outline, CircleShape),
+                    .border(1.dp, HtmlAvatarBorder, CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = initial,
-                    color = Color(0xFF042F2E),
+                    color = HtmlPrimaryText,
                     fontWeight = FontWeight.Bold,
                     fontSize = (sizeDp * 0.42f).sp
                 )
             }
+        } else {
+            DefaultPurpleAvatarSvg(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+                    .border(1.dp, HtmlAvatarBorder, CircleShape)
+            )
         }
+
         if (isOnline) {
             Box(
                 modifier = Modifier
@@ -255,7 +309,7 @@ fun UserAvatarView(
                     .align(Alignment.BottomEnd)
                     .clip(CircleShape)
                     .background(Color(0xFF10B981))
-                    .border(1.5.dp, MaterialTheme.colorScheme.surface, CircleShape)
+                    .border(2.dp, HtmlPanel, CircleShape)
             )
         }
     }
@@ -266,25 +320,41 @@ fun AuthScreen(
     onAuthSuccess: (OnboardingPreferences) -> Unit
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val credentialManager = remember { CredentialManager.create(context) }
+    val scope = rememberCoroutineScope()
+    val sharedPrefs = remember(context) {
+        context.getSharedPreferences(ACCOUNT_PREFS_NAME, Context.MODE_PRIVATE)
+    }
 
-    var username by rememberSaveable { mutableStateOf("") }
-    var statusText by rememberSaveable { mutableStateOf("SMART CHAT মেম্বার") }
-    var selectedAvatar by rememberSaveable { mutableStateOf("avatar_emerald") }
+    var isSignupMode by rememberSaveable { mutableStateOf(true) }
+    var fullName by rememberSaveable { mutableStateOf(sharedPrefs.getString("full_name", "") ?: "") }
+    var username by rememberSaveable { mutableStateOf(sharedPrefs.getString("username", "") ?: "") }
+    var signupEmail by rememberSaveable { mutableStateOf(sharedPrefs.getString("email", "") ?: "") }
+    var signupPassword by rememberSaveable { mutableStateOf("") }
+
+    var loginEmail by rememberSaveable { mutableStateOf(sharedPrefs.getString("email", "") ?: "") }
+    var loginPassword by rememberSaveable { mutableStateOf("") }
+
+    var avatarData by rememberSaveable {
+        mutableStateOf(sharedPrefs.getString("avatar_data", "avatar_indigo") ?: "avatar_indigo")
+    }
     var autoDeleteHours by rememberSaveable { mutableLongStateOf(24L) }
+
     var isLoading by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var messageText by remember { mutableStateOf<String?>(null) }
+    var isSuccessMessage by remember { mutableStateOf(false) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null) {
-            val compressed = AudioHelper.compressGalleryImageToBase64(context, uri)
-            if (compressed != null) {
-                selectedAvatar = compressed
+            val encoded = AudioHelper.compressGalleryImageToBase64(context, uri)
+            if (encoded != null) {
+                avatarData = encoded
+                messageText = null
             } else {
-                errorMessage = "ছবি প্রসেস করা যায়নি, আবার চেষ্টা করুন।"
+                isSuccessMessage = false
+                messageText = "Please choose a valid JPG, PNG, or WebP image."
             }
         }
     }
@@ -294,11 +364,20 @@ fun AuthScreen(
             context = context,
             credentialManager = credentialManager,
             onAuthSuccess = {
+                val savedName = sharedPrefs.getString("full_name", "") ?: ""
+                val savedUser = sharedPrefs.getString("username", "") ?: ""
+                val savedAvatar = sharedPrefs.getString("avatar_data", "avatar_indigo") ?: "avatar_indigo"
+                val displayUsername = when {
+                    savedName.isNotBlank() -> savedName
+                    savedUser.isNotBlank() -> savedUser
+                    else -> ""
+                }
+                val statusHandle = if (savedUser.isNotBlank()) "@${savedUser.removePrefix("@")}" else "SMART CHAT মেম্বার"
                 onAuthSuccess(
                     OnboardingPreferences(
-                        username = username.trim(),
-                        avatarData = selectedAvatar,
-                        statusText = statusText.trim(),
+                        username = displayUsername,
+                        avatarData = savedAvatar,
+                        statusText = statusHandle,
                         autoDeleteHours = autoDeleteHours
                     )
                 )
@@ -311,395 +390,570 @@ fun AuthScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .windowInsetsPadding(WindowInsets.safeDrawing),
+            .background(HtmlBg)
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 24.dp),
         contentAlignment = Alignment.Center
     ) {
-        Column(
+        // .container
+        Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .widthIn(max = 520.dp)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .widthIn(max = 420.dp),
+            shape = RoundedCornerShape(20.dp),
+            color = HtmlPanel,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
+            border = BorderStroke(1.dp, HtmlBorder)
         ) {
-            // Flat Hero Header Box (No Shadow / No Glow)
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 0.dp,
-                shadowElevation = 0.dp,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                // .brand
+                Box(
+                    modifier = Modifier
+                        .size(55.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(HtmlLogoBg)
+                        .border(1.dp, HtmlLogoBorder, RoundedCornerShape(16.dp)),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
+                    Text(
+                        text = "✦",
+                        fontSize = 25.sp,
+                        color = HtmlAccent,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(15.dp))
+
+                Text(
+                    text = "Welcome",
+                    fontSize = 25.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = HtmlText,
+                    letterSpacing = (-0.7).sp,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "Create your account or sign in to continue.",
+                    fontSize = 13.sp,
+                    color = HtmlMuted,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(26.dp))
+
+                // .tabs
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(11.dp))
+                        .background(HtmlTabsBg)
+                        .border(1.dp, HtmlBorder, RoundedCornerShape(11.dp))
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isSignupMode) HtmlActiveTabBg else Color.Transparent)
+                            .clickable {
+                                isSignupMode = true
+                                messageText = null
+                            }
+                            .padding(vertical = 11.dp)
+                            .testTag("signup_tab_button"),
+                        contentAlignment = Alignment.Center
                     ) {
+                        Text(
+                            text = "Sign Up",
+                            fontSize = 14.sp,
+                            fontWeight = if (isSignupMode) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (isSignupMode) HtmlActiveTabText else HtmlMuted
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (!isSignupMode) HtmlActiveTabBg else Color.Transparent)
+                            .clickable {
+                                isSignupMode = false
+                                messageText = null
+                            }
+                            .padding(vertical = 11.dp)
+                            .testTag("login_tab_button"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Login",
+                            fontSize = 14.sp,
+                            fontWeight = if (!isSignupMode) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (!isSignupMode) HtmlActiveTabText else HtmlMuted
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(23.dp))
+
+                // #message
+                if (!messageText.isNullOrBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(HtmlField)
+                            .border(1.dp, HtmlBorder, RoundedCornerShape(9.dp))
+                            .padding(12.dp)
+                            .testTag("auth_message_box")
+                    ) {
+                        Text(
+                            text = messageText!!,
+                            fontSize = 13.sp,
+                            lineHeight = 19.sp,
+                            color = if (isSuccessMessage) HtmlSuccessText else HtmlErrorText
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+
+                if (isSignupMode) {
+                    // #signupForm
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        // .avatar-wrap
                         Box(
                             modifier = Modifier
-                                .size(48.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(MaterialTheme.colorScheme.primary),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Chat,
-                                contentDescription = "SMART CHAT লোগো",
-                                tint = MaterialTheme.colorScheme.onPrimary,
-                                modifier = Modifier.size(26.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                text = stringResource(R.string.app_name),
-                                style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = "Package: smart.chat • No-Lag Ultra Fast",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = stringResource(R.string.app_tagline),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        textAlign = TextAlign.Center
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-                    // Feature Badges Row
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly
-                    ) {
-                        FeatureBadge(icon = Icons.Default.Chat, text = "গ্রুপ চ্যাট")
-                        FeatureBadge(icon = Icons.Default.Call, text = "ভয়েস ও কল")
-                        FeatureBadge(icon = Icons.Default.AutoDelete, text = "২৪-৪৮ঘঃ অটো ক্লিন")
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Profile Setup Card before Sign-In / Sign-Up
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 0.dp,
-                shadowElevation = 0.dp,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "প্রোফাইল সেটআপ ও লগইন",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "আপনার ইউজারনেম ও প্রোফাইল ছবি সিলেক্ট করে Google দিয়ে লগইন করুন",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Current Avatar Preview + Pick Gallery Button
-                    UserAvatarView(
-                        avatarData = selectedAvatar,
-                        username = username.ifBlank { "S" },
-                        sizeDp = 72
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    OutlinedButton(
-                        onClick = {
-                            photoPickerLauncher.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                            )
-                        },
-                        modifier = Modifier.testTag("pick_profile_photo_button"),
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CameraAlt,
-                            contentDescription = "গ্যালারি থেকে ছবি নিন",
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(stringResource(R.string.pick_profile_photo))
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Preset Color Avatars
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        PRESET_AVATARS.forEach { (key, color) ->
-                            val isSelected = selectedAvatar == key
-                            Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(color)
-                                    .border(
-                                        width = if (isSelected) 2.5.dp else 1.dp,
-                                        color = if (isSelected) Color.White else MaterialTheme.colorScheme.outline,
-                                        shape = CircleShape
-                                    )
-                                    .clickable { selectedAvatar = key }
-                                    .testTag("preset_avatar_$key"),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                if (isSelected) {
-                                    Icon(
-                                        imageVector = Icons.Default.CheckCircle,
-                                        contentDescription = "Selected avatar",
-                                        tint = Color(0xFF042F2E),
-                                        modifier = Modifier.size(18.dp)
+                                .size(82.dp)
+                                .clip(CircleShape)
+                                .clickable {
+                                    photoPickerLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                     )
                                 }
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    OutlinedTextField(
-                        value = username,
-                        onValueChange = { username = it.take(40) },
-                        label = { Text(stringResource(R.string.username_label)) },
-                        placeholder = { Text(stringResource(R.string.username_placeholder)) },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.Person,
-                                contentDescription = "Username icon"
+                                .testTag("pick_photo_avatar")
+                        ) {
+                            UserAvatarView(
+                                avatarData = avatarData,
+                                username = fullName.ifBlank { username.ifBlank { "U" } },
+                                sizeDp = 82
                             )
-                        },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("username_input")
-                    )
+                        }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
 
-                    // Auto-delete retention selector (24h vs 48h)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
                         Text(
-                            text = "অটো মেসেজ ডিলিট সময়:",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface
+                            text = "Choose profile picture",
+                            color = HtmlAvatarLabel,
+                            fontSize = 13.sp,
+                            modifier = Modifier
+                                .clickable {
+                                    photoPickerLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                }
+                                .padding(vertical = 4.dp, horizontal = 8.dp)
+                                .testTag("pick_photo_button")
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterChip(
-                                selected = autoDeleteHours == 24L,
-                                onClick = { autoDeleteHours = 24L },
-                                label = { Text("১ দিন (24h)") },
-                                modifier = Modifier.testTag("ttl_24h_chip"),
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer
-                                )
-                            )
-                            FilterChip(
-                                selected = autoDeleteHours == 48L,
-                                onClick = { autoDeleteHours = 48L },
-                                label = { Text("২ দিন (48h)") },
-                                modifier = Modifier.testTag("ttl_48h_chip"),
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer
-                                )
-                            )
-                        }
-                    }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(20.dp))
 
-                    if (errorMessage != null) {
-                        Surface(
+                        // Full Name
+                        HtmlFormField(
+                            label = "Full Name",
+                            value = fullName,
+                            onValueChange = { if (it.length <= 60) fullName = it },
+                            placeholder = "Enter your name",
+                            testTag = "full_name_input"
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Username
+                        HtmlFormField(
+                            label = "Username",
+                            value = username,
+                            onValueChange = { input ->
+                                val cleaned = input.filter { it.isLetterOrDigit() || it == '_' || it == '@' }
+                                if (cleaned.length <= 24) username = cleaned
+                            },
+                            placeholder = "@username",
+                            testTag = "username_input"
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Email Address
+                        HtmlFormField(
+                            label = "Email Address",
+                            value = signupEmail,
+                            onValueChange = { signupEmail = it.trim() },
+                            placeholder = "you@example.com",
+                            keyboardType = KeyboardType.Email,
+                            testTag = "signup_email_input"
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Password
+                        HtmlFormField(
+                            label = "Password",
+                            value = signupPassword,
+                            onValueChange = { signupPassword = it },
+                            placeholder = "At least 8 characters",
+                            isPassword = true,
+                            imeAction = ImeAction.Done,
+                            testTag = "signup_password_input"
+                        )
+
+                        Spacer(modifier = Modifier.height(21.dp))
+
+                        // Primary Button: Create Account
+                        Button(
+                            onClick = {
+                                val trimmedName = fullName.trim()
+                                val cleanUser = username.trim().removePrefix("@")
+                                val trimmedEmail = signupEmail.trim().lowercase()
+
+                                when {
+                                    trimmedName.isEmpty() -> {
+                                        isSuccessMessage = false
+                                        messageText = "Please enter your full name."
+                                    }
+                                    cleanUser.length < 3 || !cleanUser.all { it.isLetterOrDigit() || it == '_' } -> {
+                                        isSuccessMessage = false
+                                        messageText = "Username must be 3-24 characters (letters, numbers, or _)."
+                                    }
+                                    !trimmedEmail.contains("@") || !trimmedEmail.contains(".") -> {
+                                        isSuccessMessage = false
+                                        messageText = "Please enter a valid email address."
+                                    }
+                                    signupPassword.length < 8 -> {
+                                        isSuccessMessage = false
+                                        messageText = "Password must be at least 8 characters."
+                                    }
+                                    else -> {
+                                        messageText = null
+                                        isLoading = true
+                                        sharedPrefs.edit()
+                                            .putString("full_name", trimmedName)
+                                            .putString("username", cleanUser)
+                                            .putString("email", trimmedEmail)
+                                            .putString("password_hash", hashPassword(signupPassword))
+                                            .putString("avatar_data", avatarData)
+                                            .apply()
+
+                                        onGoogleSignInClicked(
+                                            context = context,
+                                            credentialManager = credentialManager,
+                                            onAuthSuccess = {
+                                                isLoading = false
+                                                onAuthSuccess(
+                                                    OnboardingPreferences(
+                                                        username = trimmedName,
+                                                        avatarData = avatarData,
+                                                        statusText = "@$cleanUser",
+                                                        autoDeleteHours = autoDeleteHours
+                                                    )
+                                                )
+                                            },
+                                            onAuthError = { msg ->
+                                                isLoading = false
+                                                isSuccessMessage = false
+                                                messageText = msg
+                                            },
+                                            scope = scope,
+                                            onAuthCancelled = {
+                                                isLoading = false
+                                            }
+                                        )
+                                    }
+                                }
+                            },
+                            enabled = !isLoading,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(bottom = 12.dp),
+                                .height(48.dp)
+                                .testTag("google_sign_in_button"),
                             shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.15f),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error)
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = HtmlAccent,
+                                contentColor = HtmlPrimaryText,
+                                disabledContainerColor = HtmlAccent.copy(alpha = 0.6f),
+                                disabledContentColor = HtmlPrimaryText.copy(alpha = 0.6f)
+                            ),
+                            border = BorderStroke(1.dp, HtmlPrimaryBorder),
+                            elevation = ButtonDefaults.buttonElevation(0.dp, 0.dp, 0.dp)
+                        ) {
+                            if (isLoading) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    color = HtmlPrimaryText,
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Text(
+                                    text = "Create Account",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
                         ) {
                             Text(
-                                text = errorMessage!!,
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(12.dp)
+                                text = "Already have an account? ",
+                                fontSize = 13.sp,
+                                color = HtmlMuted
                             )
-                        }
-                    }
-
-                    // Primary Google Sign-In Button
-                    Button(
-                        onClick = {
-                            errorMessage = null
-                            isLoading = true
-                            onGoogleSignInClicked(
-                                context = context,
-                                credentialManager = credentialManager,
-                                onAuthSuccess = {
-                                    isLoading = false
-                                    onAuthSuccess(
-                                        OnboardingPreferences(
-                                            username = username.trim(),
-                                            avatarData = selectedAvatar,
-                                            statusText = statusText.trim(),
-                                            autoDeleteHours = autoDeleteHours
-                                        )
-                                    )
-                                },
-                                onAuthError = { msg ->
-                                    isLoading = false
-                                    errorMessage = msg
-                                },
-                                scope = scope,
-                                onAuthCancelled = {
-                                    isLoading = false
-                                }
-                            )
-                        },
-                        enabled = !isLoading,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
-                            .testTag("google_sign_in_button"),
-                        shape = RoundedCornerShape(12.dp),
-                        elevation = ButtonDefaults.buttonElevation(
-                            defaultElevation = 0.dp,
-                            pressedElevation = 0.dp,
-                            disabledElevation = 0.dp
-                        )
-                    ) {
-                        if (isLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(22.dp),
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Default.Login,
-                                contentDescription = "Sign in with Google"
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
                             Text(
-                                text = stringResource(R.string.sign_in_with_google),
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 15.sp
+                                text = "Login",
+                                fontSize = 13.sp,
+                                color = HtmlPrimaryBorder,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier
+                                    .clickable {
+                                        isSignupMode = false
+                                        messageText = null
+                                    }
+                                    .padding(vertical = 4.dp, horizontal = 4.dp)
+                                    .testTag("switch_to_login_button")
+                            )
+                        }
+                    }
+                } else {
+                    // #loginForm
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        // Email Address
+                        HtmlFormField(
+                            label = "Email Address",
+                            value = loginEmail,
+                            onValueChange = { loginEmail = it.trim() },
+                            placeholder = "you@example.com",
+                            keyboardType = KeyboardType.Email,
+                            testTag = "login_email_input"
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Password
+                        HtmlFormField(
+                            label = "Password",
+                            value = loginPassword,
+                            onValueChange = { loginPassword = it },
+                            placeholder = "Enter your password",
+                            isPassword = true,
+                            imeAction = ImeAction.Done,
+                            testTag = "login_password_input"
+                        )
+
+                        Spacer(modifier = Modifier.height(21.dp))
+
+                        // Primary Button: Login to Account
+                        Button(
+                            onClick = {
+                                val trimmedEmail = loginEmail.trim().lowercase()
+                                when {
+                                    !trimmedEmail.contains("@") || !trimmedEmail.contains(".") -> {
+                                        isSuccessMessage = false
+                                        messageText = "Please enter your email address."
+                                    }
+                                    loginPassword.isEmpty() -> {
+                                        isSuccessMessage = false
+                                        messageText = "Please enter your password."
+                                    }
+                                    else -> {
+                                        val savedEmail = sharedPrefs.getString("email", "")
+                                        val savedHash = sharedPrefs.getString("password_hash", "")
+                                        if (!savedEmail.isNullOrBlank() &&
+                                            savedEmail == trimmedEmail &&
+                                            !savedHash.isNullOrBlank() &&
+                                            savedHash != hashPassword(loginPassword)
+                                        ) {
+                                            isSuccessMessage = false
+                                            messageText = "Incorrect password. Please try again."
+                                            return@Button
+                                        }
+
+                                        messageText = null
+                                        isLoading = true
+                                        sharedPrefs.edit()
+                                            .putString("email", trimmedEmail)
+                                            .putString("password_hash", hashPassword(loginPassword))
+                                            .apply()
+
+                                        onGoogleSignInClicked(
+                                            context = context,
+                                            credentialManager = credentialManager,
+                                            onAuthSuccess = {
+                                                isLoading = false
+                                                val savedName = sharedPrefs.getString("full_name", "") ?: ""
+                                                val savedUser = sharedPrefs.getString("username", "") ?: ""
+                                                val savedAvatar = sharedPrefs.getString("avatar_data", "avatar_indigo") ?: "avatar_indigo"
+                                                val fallbackName = trimmedEmail.substringBefore("@")
+                                                onAuthSuccess(
+                                                    OnboardingPreferences(
+                                                        username = savedName.ifBlank { fallbackName },
+                                                        avatarData = savedAvatar,
+                                                        statusText = if (savedUser.isNotBlank()) "@$savedUser" else "@$fallbackName",
+                                                        autoDeleteHours = autoDeleteHours
+                                                    )
+                                                )
+                                            },
+                                            onAuthError = { msg ->
+                                                isLoading = false
+                                                isSuccessMessage = false
+                                                messageText = msg
+                                            },
+                                            scope = scope,
+                                            onAuthCancelled = {
+                                                isLoading = false
+                                            }
+                                        )
+                                    }
+                                }
+                            },
+                            enabled = !isLoading,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("google_sign_in_button"),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = HtmlAccent,
+                                contentColor = HtmlPrimaryText,
+                                disabledContainerColor = HtmlAccent.copy(alpha = 0.6f),
+                                disabledContentColor = HtmlPrimaryText.copy(alpha = 0.6f)
+                            ),
+                            border = BorderStroke(1.dp, HtmlPrimaryBorder),
+                            elevation = ButtonDefaults.buttonElevation(0.dp, 0.dp, 0.dp)
+                        ) {
+                            if (isLoading) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(20.dp),
+                                    color = HtmlPrimaryText,
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Text(
+                                    text = "Login to Account",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Text(
+                                text = "New here? ",
+                                fontSize = 13.sp,
+                                color = HtmlMuted
+                            )
+                            Text(
+                                text = "Create account",
+                                fontSize = 13.sp,
+                                color = HtmlPrimaryBorder,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier
+                                    .clickable {
+                                        isSignupMode = true
+                                        messageText = null
+                                    }
+                                    .padding(vertical = 4.dp, horizontal = 4.dp)
+                                    .testTag("switch_to_signup_button")
                             )
                         }
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(24.dp))
 
-            // Admin & Firebase Info Card
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 0.dp,
-                shadowElevation = 0.dp,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.AdminPanelSettings,
-                            contentDescription = "Admin info",
-                            tint = MaterialTheme.colorScheme.tertiary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "অ্যাডমিন অ্যাক্সেস: $ADMIN_EMAIL",
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.tertiary
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "• $ADMIN_EMAIL দিয়ে Google Sign-In করলে স্বয়ংক্রিয়ভাবে সুপার অ্যাডমিন প্যানেল চালু হবে (সবাইকে ব্লক/আনব্লক ও মেসেজ ক্লিয়ার করার পাওয়ার)।",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.Top) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = "Firebase console info",
-                            tint = MaterialTheme.colorScheme.secondary,
-                            modifier = Modifier.size(16.dp).padding(top = 2.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Google Sign-In অটোমেটিক কনফিগার করা আছে। আলাদা Email/Password প্রোভাইডার চালু করতে চাইলে Firebase Console > Authentication থেকে ম্যানুয়ালি এনাবল করতে পারবেন।",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                // .footer
+                Text(
+                    text = "Premium Account Interface\nSMART CHAT Secure Account System",
+                    color = HtmlFooterText,
+                    fontSize = 11.sp,
+                    lineHeight = 17.sp,
+                    textAlign = TextAlign.Center
+                )
             }
         }
     }
 }
 
 @Composable
-private fun FeatureBadge(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    text: String
+private fun HtmlFormField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    keyboardType: KeyboardType = KeyboardType.Text,
+    imeAction: ImeAction = ImeAction.Next,
+    isPassword: Boolean = false,
+    testTag: String
 ) {
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = text,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(15.dp)
-        )
-        Spacer(modifier = Modifier.width(5.dp))
+    Column(modifier = Modifier.fillMaxWidth()) {
         Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurface
+            text = label,
+            fontSize = 13.sp,
+            color = HtmlLabel,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            placeholder = {
+                Text(
+                    text = placeholder,
+                    color = HtmlPlaceholder,
+                    fontSize = 14.sp
+                )
+            },
+            singleLine = true,
+            visualTransformation = if (isPassword) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = keyboardType,
+                imeAction = imeAction
+            ),
+            shape = RoundedCornerShape(10.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = HtmlField,
+                unfocusedContainerColor = HtmlField,
+                focusedBorderColor = HtmlAccent,
+                unfocusedBorderColor = HtmlBorder,
+                focusedTextColor = HtmlText,
+                unfocusedTextColor = HtmlText,
+                cursorColor = HtmlAccent
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag(testTag)
         )
     }
 }
