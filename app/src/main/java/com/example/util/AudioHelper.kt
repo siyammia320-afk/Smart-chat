@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioAttributes
-import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.net.Uri
@@ -14,19 +13,9 @@ import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
-import kotlin.coroutines.resume
 
 /**
- * Lightweight, zero-lag audio recorder, player, continuous live call streamer,
+ * Lightweight, zero-lag voice message recorder, player,
  * and profile image compressor. Designed specifically for Firebase Free Plan efficiency.
  */
 class AudioHelper(private val context: Context) {
@@ -35,25 +24,6 @@ class AudioHelper(private val context: Context) {
     private var recordingFile: File? = null
     private var recordingStartMs: Long = 0L
     private var mediaPlayer: MediaPlayer? = null
-
-    // Dedicated live-call recorder & sequential playback queue
-    private var callSliceRecorder: MediaRecorder? = null
-    private var callSliceFile: File? = null
-    private var callMediaPlayer: MediaPlayer? = null
-    private val callScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val incomingCallAudioChannel = Channel<String>(capacity = 12)
-    private val playedChunkIds = LinkedHashSet<String>()
-
-    private val audioManager: AudioManager? =
-        context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-
-    init {
-        callScope.launch {
-            for (audioBase64 in incomingCallAudioChannel) {
-                playSingleCallChunkSuspend(audioBase64)
-            }
-        }
-    }
 
     fun startRecording(): Boolean {
         stopRecordingCleanup()
@@ -77,192 +47,6 @@ class AudioHelper(private val context: Context) {
             stopRecordingCleanup()
             false
         }
-    }
-
-    /**
-     * Records a single live call voice slice (~1.5s) on IO thread.
-     * Returns Base64 audio if speech/sound was captured, or null if completely silent/failed.
-     */
-    suspend fun recordLiveCallSlice(durationMs: Long = 1500L, requireVoiceActivity: Boolean = true): String? =
-        withContext(Dispatchers.IO) {
-            stopCallSliceCleanup()
-            val outFile = File(context.cacheDir, "call_slice_${System.currentTimeMillis()}.3gp")
-            callSliceFile = outFile
-            try {
-                val recorder = createMediaRecorder()
-                recorder.setAudioSource(MediaRecorder.AudioSource.MIC)
-                recorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
-                recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
-                recorder.setAudioSamplingRate(8000)
-                recorder.setAudioEncodingBitRate(12200)
-                recorder.setOutputFile(outFile.absolutePath)
-                recorder.prepare()
-                recorder.start()
-                callSliceRecorder = recorder
-
-                // Prime maxAmplitude (first call always returns 0)
-                try {
-                    recorder.maxAmplitude
-                } catch (_: Exception) {
-                }
-
-                var peakAmplitude = 0
-                val steps = 5
-                val stepDelay = (durationMs / steps).coerceAtLeast(200L)
-                repeat(steps) {
-                    delay(stepDelay)
-                    val amp = try {
-                        recorder.maxAmplitude
-                    } catch (_: Exception) {
-                        0
-                    }
-                    if (amp > peakAmplitude) {
-                        peakAmplitude = amp
-                    }
-                }
-
-                try {
-                    recorder.stop()
-                } catch (_: Exception) {
-                }
-                try {
-                    recorder.release()
-                } catch (_: Exception) {
-                }
-                callSliceRecorder = null
-
-                // Very low threshold (220) so normal/soft speaking is always picked up
-                val hasSpeech = !requireVoiceActivity || peakAmplitude >= 220
-                if (hasSpeech && outFile.exists() && outFile.length() > 60L) {
-                    val bytes = outFile.readBytes()
-                    outFile.delete()
-                    Base64.encodeToString(bytes, Base64.NO_WRAP)
-                } else {
-                    outFile.delete()
-                    null
-                }
-            } catch (e: Exception) {
-                Log.w("AudioHelper", "Live call slice record error", e)
-                stopCallSliceCleanup()
-                null
-            }
-        }
-
-    private fun stopCallSliceCleanup() {
-        try {
-            callSliceRecorder?.stop()
-        } catch (_: Exception) {
-        }
-        try {
-            callSliceRecorder?.release()
-        } catch (_: Exception) {
-        }
-        callSliceRecorder = null
-        try {
-            callSliceFile?.delete()
-        } catch (_: Exception) {
-        }
-        callSliceFile = null
-    }
-
-    /**
-     * Parses a packed call chunk ("chunkId|speakerId|base64" or raw base64) and queues it
-     * for immediate playback if it came from another participant and hasn't been played yet.
-     */
-    fun handleIncomingCallPacket(packet: String, currentUserId: String, fallbackSpeakerId: String = "") {
-        if (packet.isBlank()) return
-        val parts = packet.split("|", limit = 3)
-        val chunkId: String
-        val speakerId: String
-        val audioBase64: String
-
-        if (parts.size == 3) {
-            chunkId = parts[0]
-            speakerId = parts[1]
-            audioBase64 = parts[2]
-        } else {
-            speakerId = fallbackSpeakerId
-            audioBase64 = packet
-            chunkId = "${speakerId}_${packet.hashCode()}"
-        }
-
-        if (speakerId.isBlank() || speakerId == currentUserId || audioBase64.isBlank()) {
-            return
-        }
-
-        synchronized(playedChunkIds) {
-            if (playedChunkIds.contains(chunkId)) return
-            playedChunkIds.add(chunkId)
-            if (playedChunkIds.size > 100) {
-                val first = playedChunkIds.iterator().next()
-                playedChunkIds.remove(first)
-            }
-        }
-
-        incomingCallAudioChannel.trySend(audioBase64)
-    }
-
-    private suspend fun playSingleCallChunkSuspend(audioBase64: String) {
-        val tempFile = withContext(Dispatchers.IO) {
-            try {
-                val bytes = Base64.decode(audioBase64, Base64.DEFAULT)
-                if (bytes.isEmpty()) return@withContext null
-                val file = File(context.cacheDir, "call_rx_${System.nanoTime()}.3gp")
-                FileOutputStream(file).use { it.write(bytes) }
-                file
-            } catch (e: Exception) {
-                Log.w("AudioHelper", "Failed to decode call audio chunk", e)
-                null
-            }
-        } ?: return
-
-        suspendCancellableCoroutine { cont ->
-            try {
-                stopCallPlaybackOnly()
-                val player = MediaPlayer()
-                player.setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build()
-                )
-                player.setDataSource(tempFile.absolutePath)
-                player.setVolume(1.0f, 1.0f)
-                player.setOnCompletionListener {
-                    stopCallPlaybackOnly()
-                    tempFile.delete()
-                    if (cont.isActive) cont.resume(Unit)
-                }
-                player.setOnErrorListener { _, _, _ ->
-                    stopCallPlaybackOnly()
-                    tempFile.delete()
-                    if (cont.isActive) cont.resume(Unit)
-                    true
-                }
-                player.prepare()
-                player.start()
-                callMediaPlayer = player
-            } catch (e: Exception) {
-                Log.w("AudioHelper", "Failed to play incoming call chunk", e)
-                stopCallPlaybackOnly()
-                tempFile.delete()
-                if (cont.isActive) cont.resume(Unit)
-            }
-        }
-    }
-
-    private fun stopCallPlaybackOnly() {
-        try {
-            if (callMediaPlayer?.isPlaying == true) {
-                callMediaPlayer?.stop()
-            }
-        } catch (_: Exception) {
-        }
-        try {
-            callMediaPlayer?.release()
-        } catch (_: Exception) {
-        }
-        callMediaPlayer = null
     }
 
     /**
@@ -370,36 +154,9 @@ class AudioHelper(private val context: Context) {
         mediaPlayer = null
     }
 
-    fun configureCallAudio(speakerOn: Boolean, micMuted: Boolean) {
-        try {
-            // Keep MODE_NORMAL when speakerphone is ON so MediaPlayer USAGE_MEDIA plays loud and clear
-            audioManager?.mode = if (speakerOn) AudioManager.MODE_NORMAL else AudioManager.MODE_IN_COMMUNICATION
-            @Suppress("DEPRECATION")
-            audioManager?.isSpeakerphoneOn = speakerOn
-            audioManager?.isMicrophoneMute = micMuted
-        } catch (e: Exception) {
-            Log.w("AudioHelper", "Failed to configure call audio mode", e)
-        }
-    }
-
-    fun resetCallAudio() {
-        stopCallSliceCleanup()
-        stopCallPlaybackOnly()
-        try {
-            audioManager?.isMicrophoneMute = false
-            @Suppress("DEPRECATION")
-            audioManager?.isSpeakerphoneOn = false
-            audioManager?.mode = AudioManager.MODE_NORMAL
-        } catch (e: Exception) {
-            Log.w("AudioHelper", "Failed to reset call audio mode", e)
-        }
-    }
-
     fun releaseAll() {
         stopRecordingCleanup()
         stopPlayback()
-        resetCallAudio()
-        callScope.cancel()
     }
 
     private fun createMediaRecorder(): MediaRecorder {

@@ -173,84 +173,6 @@
         "createdAt",
         "updatedAt"
       ]
-    },
-    "VoiceCallSession": {
-      "title": "VoiceCallSession",
-      "description": "Real-time voice call signaling and live audio room session.",
-      "type": "object",
-      "properties": {
-        "groupId": {
-          "type": "string",
-          "enum": ["smart_chat_main"],
-          "description": "Group partition identifier for query enforcement."
-        },
-        "callerId": {
-          "type": "string",
-          "description": "UID of the user who initiated the call."
-        },
-        "callerName": {
-          "type": "string",
-          "description": "Display name of the caller."
-        },
-        "targetUserId": {
-          "type": "string",
-          "description": "Target recipient UID or 'all' for group voice call."
-        },
-        "targetUserName": {
-          "type": "string",
-          "description": "Display name of target recipient or 'Group Voice Call'."
-        },
-        "status": {
-          "type": "string",
-          "enum": ["ringing", "connected", "ended"],
-          "description": "Call lifecycle state. 'ended' is terminal."
-        },
-        "sdpOffer": {
-          "type": "string",
-          "description": "WebRTC SDP offer or signaling handshake payload."
-        },
-        "sdpAnswer": {
-          "type": "string",
-          "description": "WebRTC SDP answer payload."
-        },
-        "latestAudioChunk": {
-          "type": "string",
-          "description": "Base64 compressed PCM/AMR audio frame for real-time voice relay."
-        },
-        "latestAudioSpeakerId": {
-          "type": "string",
-          "description": "UID of the participant who transmitted the latest audio frame."
-        },
-        "participantCount": {
-          "type": "integer",
-          "description": "Number of active participants in the voice call."
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Creation server timestamp submitted via FieldValue.serverTimestamp()."
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Last update server timestamp submitted via FieldValue.serverTimestamp()."
-        }
-      },
-      "required": [
-        "groupId",
-        "callerId",
-        "callerName",
-        "targetUserId",
-        "targetUserName",
-        "status",
-        "sdpOffer",
-        "sdpAnswer",
-        "latestAudioChunk",
-        "latestAudioSpeakerId",
-        "participantCount",
-        "createdAt",
-        "updatedAt"
-      ]
     }
   },
   "firestore": {
@@ -271,12 +193,6 @@
         "$ref": "#/entities/ChatMessage"
       },
       "description": "Group chat text messages, voice notes, and pinned admin notices."
-    },
-    "/calls/{callId}": {
-      "schema": {
-        "$ref": "#/entities/VoiceCallSession"
-      },
-      "description": "Real-time voice call signaling and audio relay sessions."
     }
   }
 }

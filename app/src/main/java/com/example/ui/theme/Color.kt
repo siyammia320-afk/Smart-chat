@@ -17,6 +17,7 @@ val AdminGold = Color(0xFFF59E0B)
 val AdminGoldBg = Color(0xFF3B2806)
 val DangerRed = Color(0xFFEF4444)
 val DangerRedBg = Color(0xFF3B1219)
+val OnlineGreen = Color(0xFF10B981)
 
 val TextPrimaryDark = Color(0xFFF4F5F9)  // --text: #f4f5f9
 val TextSecondaryDark = Color(0xFF939BAD)// --muted: #939bad

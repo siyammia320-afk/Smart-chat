@@ -2,16 +2,20 @@ package com.example.data.repository
 
 import android.content.Context
 import com.example.R
-import com.example.data.model. ADMIN_EMAIL
+import com.example.data.model.ADMIN_EMAIL
 import com.example.data.model.ADMIN_USER_ID
 import com.example.data.model.AccountSession
 import com.example.data.model.AccountSessionManager
 import com.example.data.model.ChatMessage
+import com.example.data.model.GROUP_CONFIG_DOC_ID
 import com.example.data.model.GROUP_ID
+import com.example.data.model.GroupSettings
 import com.example.data.model.LIVE_EMAIL_GROUP_ID
 import com.example.data.model.UserProfile
-import com.example.data.model.VoiceCallSession
+import com.example.data.model.buildDmRoomKey
+import com.example.data.model.buildStatusWithTyping
 import com.example.data.model.emailToUserId
+import com.example.data.model.encodeReplyPreviewMetadata
 import com.example.data.remote.OperationType
 import com.example.data.remote.handleFirestoreError
 import com.google.firebase.Firebase
@@ -376,16 +380,125 @@ class SmartChatRepository(
                 snapshot.toObjects(
                     UserProfile::class.java,
                     DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                ).sortedWith(
-                    compareByDescending<UserProfile> { it.isAdminBadge }
-                        .thenByDescending { it.isOnline }
-                        .thenBy { it.username.lowercase() }
-                )
+                ).filter { it.userId != GROUP_CONFIG_DOC_ID && it.id != GROUP_CONFIG_DOC_ID }
+                    .sortedWith(
+                        compareByDescending<UserProfile> { it.isAdminBadge }
+                            .thenByDescending { it.isOnline }
+                            .thenBy { it.username.lowercase() }
+                    )
             }
             .catch { error ->
                 if (error is Exception) handleFirestoreError(error, OperationType.LIST, path)
                 throw error
             }
+    }
+
+    fun observeGroupSettings(): Flow<GroupSettings> {
+        val docRef = db.collection("users").document(GROUP_CONFIG_DOC_ID)
+        return docRef.snapshots()
+            .map { snapshot ->
+                if (snapshot.exists()) {
+                    val profile = snapshot.toObject(
+                        UserProfile::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    )
+                    GroupSettings(
+                        groupName = profile?.username?.takeIf { it.isNotBlank() } ?: "SMART CHAT",
+                        isGroupOff = profile?.isBlocked == true
+                    )
+                } else {
+                    GroupSettings(groupName = "SMART CHAT", isGroupOff = false)
+                }
+            }
+            .catch {
+                emit(GroupSettings(groupName = "SMART CHAT", isGroupOff = false))
+            }
+    }
+
+    suspend fun updateGroupSettings(groupName: String, isGroupOff: Boolean): Result<Unit> {
+        requireUserId()
+        if (!isCurrentUserAdmin()) {
+            return Result.failure(IllegalAccessException("Only Admin can update group settings"))
+        }
+        val docRef = db.collection("users").document(GROUP_CONFIG_DOC_ID)
+        val cleanName = groupName.trim().take(40).ifBlank { "SMART CHAT" }
+        return try {
+            val snap = docRef.get().await()
+            if (!snap.exists()) {
+                val createDoc = UserProfile(
+                    id = GROUP_CONFIG_DOC_ID,
+                    userId = GROUP_CONFIG_DOC_ID,
+                    groupId = activeGroupId,
+                    username = cleanName,
+                    avatarData = "avatar_indigo",
+                    statusText = if (isGroupOff) "GROUP_OFF" else "GROUP_ON",
+                    isBlocked = false,
+                    isOnline = true,
+                    isAdminBadge = true,
+                    autoDeleteHours = 24L
+                )
+                docRef.set(createDoc.toCreateMap()).await()
+                if (isGroupOff) {
+                    docRef.update(
+                        mapOf(
+                            "isBlocked" to true,
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    ).await()
+                }
+            } else {
+                docRef.update(
+                    mapOf(
+                        "username" to cleanName,
+                        "statusText" to if (isGroupOff) "GROUP_OFF" else "GROUP_ON",
+                        "isBlocked" to isGroupOff,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, docRef.path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun setTypingStatus(currentProfile: UserProfile, roomKey: String?) {
+        val uid = currentUidOrNull() ?: return
+        val docRef = db.collection("users").document(uid)
+        val newStatus = buildStatusWithTyping(currentProfile.cleanBio(), roomKey)
+        try {
+            docRef.update(
+                mapOf(
+                    "statusText" to newStatus,
+                    "isOnline" to true,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+        }
+    }
+
+    suspend fun setOnlinePresence(currentProfile: UserProfile?, isOnline: Boolean) {
+        val uid = currentUidOrNull() ?: return
+        val docRef = db.collection("users").document(uid)
+        val cleanBio = currentProfile?.cleanBio() ?: if (isOnline) "Online" else "Offline"
+        try {
+            docRef.update(
+                mapOf(
+                    "isOnline" to isOnline,
+                    "statusText" to cleanBio.take(120),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+        }
     }
 
     suspend fun setUserBlockStatus(targetUserId: String, blocked: Boolean): Result<Unit> {
@@ -394,7 +507,7 @@ class SmartChatRepository(
         return try {
             val payload = mapOf(
                 "isBlocked" to blocked,
-                "statusText" to if (blocked) "অ্যাডমিন কর্তৃক ব্লকড (Blocked)" else "SMART CHAT মেম্বার",
+                "statusText" to if (blocked) "Blocked" else "Online",
                 "updatedAt" to FieldValue.serverTimestamp()
             )
             docRef.update(payload).await()
@@ -428,11 +541,19 @@ class SmartChatRepository(
         senderProfile: UserProfile,
         text: String,
         replyTo: ChatMessage? = null,
-        isNotice: Boolean = false
+        isNotice: Boolean = false,
+        dmTargetUserId: String? = null
     ): Result<String> {
         val uid = requireUserId()
         val messageId = "msg_${UUID.randomUUID().toString().replace("-", "").take(20)}"
         val docRef = db.collection("messages").document(messageId)
+
+        val rawReplyId = replyTo?.id ?: ""
+        val encodedReplyId = if (!dmTargetUserId.isNullOrBlank()) {
+            "DM:${buildDmRoomKey(uid, dmTargetUserId)}|$rawReplyId"
+        } else {
+            rawReplyId
+        }
 
         val message = ChatMessage(
             id = messageId,
@@ -441,11 +562,11 @@ class SmartChatRepository(
             senderName = senderProfile.username.ifBlank { "Member" },
             senderAvatar = senderProfile.avatarData,
             senderIsAdmin = isCurrentUserAdmin() && senderProfile.isAdminBadge,
-            type = if (isNotice && isCurrentUserAdmin()) "notice" else "text",
+            type = if (isNotice && isCurrentUserAdmin() && dmTargetUserId.isNullOrBlank()) "notice" else "text",
             text = text.trim().take(2000),
             audioBase64 = "",
             audioDurationSec = 0L,
-            replyToId = replyTo?.id ?: "",
+            replyToId = encodedReplyId.take(128),
             replyToSender = replyTo?.senderName ?: "",
             replyToPreview = replyTo?.text?.take(120) ?: "",
             ttlHours = if (senderProfile.autoDeleteHours == 48L) 48L else 24L
@@ -466,11 +587,18 @@ class SmartChatRepository(
         senderProfile: UserProfile,
         audioBase64: String,
         durationSec: Int,
-        caption: String = "ভয়েস মেসেজ (Voice Note)"
+        caption: String = "ভয়েস মেসেজ",
+        dmTargetUserId: String? = null
     ): Result<String> {
         val uid = requireUserId()
         val messageId = "vmsg_${UUID.randomUUID().toString().replace("-", "").take(20)}"
         val docRef = db.collection("messages").document(messageId)
+
+        val encodedReplyId = if (!dmTargetUserId.isNullOrBlank()) {
+            "DM:${buildDmRoomKey(uid, dmTargetUserId)}|"
+        } else {
+            ""
+        }
 
         val message = ChatMessage(
             id = messageId,
@@ -483,6 +611,7 @@ class SmartChatRepository(
             text = caption.take(200),
             audioBase64 = audioBase64.take(300000),
             audioDurationSec = durationSec.toLong().coerceIn(1L, 120L),
+            replyToId = encodedReplyId.take(128),
             ttlHours = if (senderProfile.autoDeleteHours == 48L) 48L else 24L
         )
 
@@ -493,6 +622,70 @@ class SmartChatRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.CREATE, docRef.path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun editMessage(message: ChatMessage, newText: String): Result<Unit> {
+        val uid = requireUserId()
+        if (message.senderId != uid && !isCurrentUserAdmin()) {
+            return Result.failure(IllegalAccessException("Cannot edit another user's message"))
+        }
+        val trimmed = newText.trim().take(2000)
+        if (trimmed.isEmpty()) return Result.failure(IllegalArgumentException("Empty text"))
+        val docRef = db.collection("messages").document(message.id)
+        val updatedPreview = encodeReplyPreviewMetadata(
+            cleanReplyText = message.cleanReplyText(),
+            isEdited = true,
+            reactions = message.reactionsMap()
+        )
+        return try {
+            docRef.update(
+                mapOf(
+                    "text" to trimmed,
+                    "replyToPreview" to updatedPreview,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docRef.path)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun toggleReaction(message: ChatMessage, emoji: String): Result<Unit> {
+        val uid = requireUserId()
+        val docRef = db.collection("messages").document(message.id)
+        val currentMap = message.reactionsMap().mapValues { it.value.toMutableList() }.toMutableMap()
+        val listForEmoji = currentMap.getOrPut(emoji) { mutableListOf() }
+        if (listForEmoji.contains(uid)) {
+            listForEmoji.remove(uid)
+        } else {
+            listForEmoji.add(uid)
+        }
+        if (listForEmoji.isEmpty()) {
+            currentMap.remove(emoji)
+        }
+        val updatedPreview = encodeReplyPreviewMetadata(
+            cleanReplyText = message.cleanReplyText(),
+            isEdited = message.isEditedMessage(),
+            reactions = currentMap
+        )
+        return try {
+            docRef.update(
+                mapOf(
+                    "replyToPreview" to updatedPreview,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            ).await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.UPDATE, docRef.path)
             Result.failure(e)
         }
     }
@@ -540,130 +733,5 @@ class SmartChatRepository(
             }
         }
         return deletedCount
-    }
-
-    fun observeActiveCalls(): Flow<List<VoiceCallSession>> {
-        val path = "calls"
-        return db.collection(path)
-            .whereEqualTo("groupId", activeGroupId)
-            .snapshots()
-            .map { snapshot ->
-                snapshot.toObjects(
-                    VoiceCallSession::class.java,
-                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                ).filter { it.status != "ended" }
-                    .sortedByDescending { (it.createdAt ?: Timestamp(0, 0)).seconds }
-            }
-            .catch { error ->
-                if (error is Exception) handleFirestoreError(error, OperationType.LIST, path)
-                throw error
-            }
-    }
-
-    suspend fun startVoiceCall(
-        callerProfile: UserProfile,
-        targetUserId: String = "all",
-        targetUserName: String = "গ্রুপ ভয়েস কল"
-    ): Result<String> {
-        val uid = requireUserId()
-        val callId = "call_${UUID.randomUUID().toString().replace("-", "").take(18)}"
-        val docRef = db.collection("calls").document(callId)
-        val session = VoiceCallSession(
-            id = callId,
-            groupId = activeGroupId,
-            callerId = uid,
-            callerName = callerProfile.username.ifBlank { "Member" },
-            targetUserId = targetUserId.ifBlank { "all" },
-            targetUserName = targetUserName.ifBlank { "গ্রুপ ভয়েস কল" },
-            status = "ringing",
-            sdpOffer = "SMARTCHAT_AUDIO_SESSION_V1",
-            sdpAnswer = "",
-            latestAudioChunk = "",
-            latestAudioSpeakerId = uid,
-            participantCount = 1L
-        )
-        return try {
-            docRef.set(session.toCreateMap()).await()
-            Result.success(callId)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.CREATE, docRef.path)
-            Result.failure(e)
-        }
-    }
-
-    suspend fun joinVoiceCall(callId: String, currentParticipants: Long): Result<Unit> {
-        val uid = requireUserId()
-        val docRef = db.collection("calls").document(callId)
-        return try {
-            val payload = mapOf(
-                "status" to "connected",
-                "sdpAnswer" to "JOINED_BY_$uid",
-                "participantCount" to (currentParticipants + 1L).coerceAtMost(50L),
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-            docRef.update(payload).await()
-            Result.success(Unit)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, docRef.path)
-            Result.failure(e)
-        }
-    }
-
-    suspend fun transmitAudioChunk(
-        callId: String,
-        audioBase64: String,
-        isCaller: Boolean = false
-    ): Result<Unit> {
-        val uid = requireUserId()
-        val docRef = db.collection("calls").document(callId)
-        val chunkId = UUID.randomUUID().toString().replace("-", "").take(10)
-        val packed = "$chunkId|$uid|${audioBase64.take(55000)}"
-        return try {
-            val payload = mutableMapOf<String, Any>(
-                "status" to "connected",
-                "latestAudioChunk" to packed.take(60000),
-                "latestAudioSpeakerId" to uid,
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-            if (packed.length <= 19500) {
-                if (isCaller) {
-                    payload["sdpOffer"] = packed
-                } else {
-                    payload["sdpAnswer"] = packed
-                }
-            }
-            docRef.update(payload).await()
-            Result.success(Unit)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, docRef.path)
-            Result.failure(e)
-        }
-    }
-
-    suspend fun endVoiceCall(callId: String): Result<Unit> {
-        requireUserId()
-        val docRef = db.collection("calls").document(callId)
-        return try {
-            val payload = mapOf(
-                "status" to "ended",
-                "latestAudioChunk" to "",
-                "participantCount" to 0L,
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-            docRef.update(payload).await()
-            docRef.delete().await()
-            Result.success(Unit)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, docRef.path)
-            Result.failure(e)
-        }
     }
 }

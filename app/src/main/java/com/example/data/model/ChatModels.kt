@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.asStateFlow
 const val GROUP_ID = "smart_chat_main"
 const val LIVE_EMAIL_GROUP_ID = "smart_chat_live"
 const val ADMIN_EMAIL = "siyammia320@gmail.com"
+const val GROUP_CONFIG_DOC_ID = "usr_000000000000000000000001"
 
 fun emailToUserId(email: String): String {
     val normalized = email.trim().lowercase()
@@ -30,6 +31,27 @@ fun hashEmailPassword(email: String, password: String): String {
 }
 
 val ADMIN_USER_ID: String = emailToUserId(ADMIN_EMAIL)
+
+fun buildDmRoomKey(uidA: String, uidB: String): String {
+    val a = uidA.trim()
+    val b = uidB.trim()
+    return if (a <= b) "${a}_${b}" else "${b}_${a}"
+}
+
+data class GroupSettings(
+    val groupName: String = "SMART CHAT",
+    val isGroupOff: Boolean = false
+)
+
+data class VipInfo(
+    val title: String,
+    val level: Int,
+    val daysOld: Long,
+    val colorHex: Long
+) {
+    val shortBadge: String
+        get() = "$title • Lv.$level"
+}
 
 data class AccountSession(
     val userId: String,
@@ -102,7 +124,7 @@ data class UserProfile(
     val groupId: String = GROUP_ID,
     val username: String = "",
     val avatarData: String = "avatar_emerald",
-    val statusText: String = "SMART CHAT মেম্বার",
+    val statusText: String = "Online",
     @get:PropertyName("isBlocked") @set:PropertyName("isBlocked")
     var isBlocked: Boolean = false,
     @get:PropertyName("isOnline") @set:PropertyName("isOnline")
@@ -126,6 +148,48 @@ data class UserProfile(
         "createdAt" to FieldValue.serverTimestamp(),
         "updatedAt" to FieldValue.serverTimestamp()
     )
+
+    fun cleanBio(): String {
+        val idx = statusText.indexOf("||TYPING:")
+        val raw = if (idx >= 0) statusText.substring(0, idx) else statusText
+        return raw.ifBlank { if (isOnline) "Online" else "Offline" }
+    }
+
+    fun isTypingInRoom(roomKey: String, nowEpochSec: Long = System.currentTimeMillis() / 1000L): Boolean {
+        val idx = statusText.indexOf("||TYPING:")
+        if (idx < 0) return false
+        val meta = statusText.substring(idx + 9)
+        val parts = meta.split(":")
+        if (parts.size < 2) return false
+        val targetRoom = parts[0]
+        val ts = parts[1].toLongOrNull() ?: return false
+        return targetRoom == roomKey && (nowEpochSec - ts) in -5L..8L
+    }
+
+    fun computeVipInfo(isSuperAdmin: Boolean = isAdminBadge || userId == ADMIN_USER_ID): VipInfo {
+        val nowSec = System.currentTimeMillis() / 1000L
+        val createdSec = createdAt?.seconds ?: nowSec
+        val days = ((nowSec - createdSec) / 86400L).coerceAtLeast(0L)
+        return when {
+            isSuperAdmin -> VipInfo("ROYAL VIP", 10, days, 0xFFF59E0B)
+            days >= 30L -> VipInfo("LEGEND VIP", 6, days, 0xFFEC4899)
+            days >= 15L -> VipInfo("DIAMOND VIP", 5, days, 0xFF38BDF8)
+            days >= 7L -> VipInfo("GOLD VIP", 4, days, 0xFFFBBF24)
+            days >= 3L -> VipInfo("SILVER VIP", 3, days, 0xFFCBD5E1)
+            days >= 1L -> VipInfo("CRYSTAL VIP", 2, days, 0xFFA78BFA)
+            else -> VipInfo("BRONZE VIP", 1, days, 0xFFD97706)
+        }
+    }
+}
+
+fun buildStatusWithTyping(cleanBio: String, roomKey: String?): String {
+    val safeBio = cleanBio.replace("||TYPING:", "").take(55)
+    return if (roomKey.isNullOrBlank()) {
+        safeBio
+    } else {
+        val nowSec = System.currentTimeMillis() / 1000L
+        "$safeBio||TYPING:$roomKey:$nowSec".take(120)
+    }
 }
 
 @IgnoreExtraProperties
@@ -159,43 +223,85 @@ data class ChatMessage(
         "audioDurationSec" to audioDurationSec.coerceIn(0L, 120L),
         "replyToId" to replyToId.take(128),
         "replyToSender" to replyToSender.take(40),
-        "replyToPreview" to replyToPreview.take(200),
+        "replyToPreview" to replyToPreview.take(600),
         "ttlHours" to if (ttlHours == 48L) 48L else 24L,
         "createdAt" to FieldValue.serverTimestamp(),
         "updatedAt" to FieldValue.serverTimestamp()
     )
+
+    fun isDirectMessage(): Boolean = replyToId.startsWith("DM:")
+
+    fun dmRoomKeyOrNull(): String? {
+        if (!isDirectMessage()) return null
+        val withoutPrefix = replyToId.removePrefix("DM:")
+        return withoutPrefix.substringBefore("|").takeIf { it.isNotBlank() }
+    }
+
+    fun actualReplyMessageId(): String {
+        return if (isDirectMessage()) {
+            replyToId.substringAfter("|", "")
+        } else {
+            replyToId
+        }
+    }
+
+    fun otherDmParticipantId(myUserId: String): String? {
+        val key = dmRoomKeyOrNull() ?: return null
+        // Format: usr_<24hex>_usr_<24hex>
+        val idx = key.indexOf("_usr_")
+        if (idx <= 0) return null
+        val firstUid = key.substring(0, idx)
+        val secondUid = key.substring(idx + 1)
+        return when (myUserId) {
+            firstUid -> secondUid
+            secondUid -> firstUid
+            else -> null
+        }
+    }
+
+    fun cleanReplyText(): String {
+        return replyToPreview
+            .substringBefore("||EDITED:")
+            .substringBefore("||REACT:")
+    }
+
+    fun isEditedMessage(): Boolean {
+        return replyToPreview.contains("||EDITED:1")
+    }
+
+    fun reactionsMap(): Map<String, List<String>> {
+        val reactPart = replyToPreview.substringAfter("||REACT:", "")
+        if (reactPart.isBlank()) return emptyMap()
+        val result = LinkedHashMap<String, List<String>>()
+        reactPart.split(";").forEach { entry ->
+            val pieces = entry.split("=", limit = 2)
+            if (pieces.size == 2) {
+                val emoji = pieces[0].trim()
+                val users = pieces[1].split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                if (emoji.isNotEmpty() && users.isNotEmpty()) {
+                    result[emoji] = users
+                }
+            }
+        }
+        return result
+    }
 }
 
-@IgnoreExtraProperties
-data class VoiceCallSession(
-    @DocumentId val id: String = "",
-    val groupId: String = GROUP_ID,
-    val callerId: String = "",
-    val callerName: String = "",
-    val targetUserId: String = "all",
-    val targetUserName: String = "গ্রুপ ভয়েস কল",
-    val status: String = "ringing", // "ringing", "connected", "ended"
-    val sdpOffer: String = "",
-    val sdpAnswer: String = "",
-    val latestAudioChunk: String = "",
-    val latestAudioSpeakerId: String = "",
-    val participantCount: Long = 1L,
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
-) {
-    fun toCreateMap(): Map<String, Any> = mapOf(
-        "groupId" to groupId,
-        "callerId" to callerId,
-        "callerName" to callerName.take(40).ifBlank { "Member" },
-        "targetUserId" to targetUserId.take(128).ifBlank { "all" },
-        "targetUserName" to targetUserName.take(40).ifBlank { "গ্রুপ ভয়েস কল" },
-        "status" to status,
-        "sdpOffer" to sdpOffer.take(20000),
-        "sdpAnswer" to sdpAnswer.take(20000),
-        "latestAudioChunk" to latestAudioChunk.take(60000),
-        "latestAudioSpeakerId" to latestAudioSpeakerId.take(128),
-        "participantCount" to participantCount.coerceIn(0L, 50L),
-        "createdAt" to FieldValue.serverTimestamp(),
-        "updatedAt" to FieldValue.serverTimestamp()
-    )
+fun encodeReplyPreviewMetadata(
+    cleanReplyText: String,
+    isEdited: Boolean,
+    reactions: Map<String, List<String>>
+): String {
+    val base = cleanReplyText
+        .replace("||EDITED:", "")
+        .replace("||REACT:", "")
+        .take(140)
+    val editedTag = if (isEdited) "||EDITED:1" else ""
+    val reactEntries = reactions.entries
+        .filter { it.key.isNotBlank() && it.value.isNotEmpty() }
+        .joinToString(";") { (emoji, uids) ->
+            "$emoji=${uids.distinct().take(15).joinToString(",")}"
+        }
+    val reactTag = if (reactEntries.isNotBlank()) "||REACT:$reactEntries" else ""
+    return "$base$editedTag$reactTag".take(600)
 }

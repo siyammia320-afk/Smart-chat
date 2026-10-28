@@ -8,7 +8,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -19,6 +18,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -28,12 +28,12 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Block
-import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DarkMode
-import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.HorizontalDivider
@@ -51,7 +51,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -64,22 +63,25 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.model.GroupSettings
 import com.example.data.model.UserProfile
 import com.example.ui.auth.OnboardingPreferences
 import com.example.ui.auth.UserAvatarView
 import com.example.ui.theme.AdminGold
 import com.example.ui.theme.DangerRed
+import com.example.ui.theme.OnlineGreen
 import com.example.ui.viewmodel.SmartChatViewModel
 import com.example.ui.viewmodel.UiState
 import com.example.util.AudioHelper
 
-enum class SmartChatTab(val titleBn: String) {
-    CHAT("গ্রুপ চ্যাট"),
-    CALL("ভয়েস কল"),
-    MEMBERS("মেম্বার ও অ্যাডমিন"),
-    PROFILE("প্রোফাইল")
+enum class SmartChatTab {
+    CHAT,
+    INBOX,
+    MEMBERS,
+    PROFILE
 }
 
 @Composable
@@ -93,23 +95,29 @@ fun SmartChatMainScreen(
     val context = LocalContext.current
     val audioHelper = remember { AudioHelper(context) }
 
-    DisposableEffect(Unit) {
+    LaunchedEffect(viewModel.currentUserId) {
+        viewModel.initializeProfile(initialPrefs)
+        viewModel.setOnlineState(true)
+    }
+
+    DisposableEffect(viewModel.currentUserId) {
         onDispose {
+            viewModel.setOnlineState(false)
             audioHelper.releaseAll()
         }
     }
 
-    LaunchedEffect(viewModel.currentUserId) {
-        viewModel.initializeProfile(initialPrefs)
-    }
-
     val currentUserProfile by viewModel.currentUserProfile.collectAsStateWithLifecycle()
+    val groupSettings by viewModel.groupSettings.collectAsStateWithLifecycle()
     val membersState by viewModel.membersState.collectAsStateWithLifecycle()
     val messagesState by viewModel.messagesState.collectAsStateWithLifecycle()
-    val activeCallsState by viewModel.activeCallsState.collectAsStateWithLifecycle()
     val statusBanner by viewModel.statusBanner.collectAsStateWithLifecycle()
     val replyingTo by viewModel.replyingTo.collectAsStateWithLifecycle()
+    val editingMessage by viewModel.editingMessage.collectAsStateWithLifecycle()
+    val activeDmPeer by viewModel.activeDmPeer.collectAsStateWithLifecycle()
     val playingMessageId by viewModel.playingMessageId.collectAsStateWithLifecycle()
+
+    val members = (membersState as? UiState.Success)?.data ?: emptyList()
 
     var currentTab by rememberSaveable { mutableStateOf(SmartChatTab.CHAT) }
     var hasMicPermission by remember {
@@ -125,22 +133,11 @@ fun SmartChatMainScreen(
         hasMicPermission = granted
     }
 
-    BackHandler(enabled = currentTab != SmartChatTab.CHAT) {
-        currentTab = SmartChatTab.CHAT
-    }
-
-    val activeCalls = (activeCallsState as? UiState.Success)?.data ?: emptyList()
-    val primaryCall = activeCalls.firstOrNull()
-
-    LaunchedEffect(primaryCall?.latestAudioChunk, primaryCall?.sdpOffer, primaryCall?.sdpAnswer) {
-        val call = primaryCall ?: return@LaunchedEffect
-        val myId = viewModel.currentUserId
-        audioHelper.handleIncomingCallPacket(call.latestAudioChunk, myId, call.latestAudioSpeakerId)
-        if (call.sdpOffer.contains("|")) {
-            audioHelper.handleIncomingCallPacket(call.sdpOffer, myId)
-        }
-        if (call.sdpAnswer.contains("|")) {
-            audioHelper.handleIncomingCallPacket(call.sdpAnswer, myId)
+    BackHandler(enabled = activeDmPeer != null || currentTab != SmartChatTab.CHAT) {
+        if (activeDmPeer != null) {
+            viewModel.openDirectMessage(null)
+        } else {
+            currentTab = SmartChatTab.CHAT
         }
     }
 
@@ -158,12 +155,15 @@ fun SmartChatMainScreen(
             topBar = {
                 FlatTopHeaderBar(
                     currentUserProfile = currentUserProfile,
+                    groupSettings = groupSettings,
+                    onlineCount = members.count { it.isOnline },
                     isSuperAdmin = viewModel.isSuperAdmin,
-                    activeCallCount = activeCalls.size,
                     isDarkTheme = isDarkTheme,
                     onToggleTheme = onToggleTheme,
-                    onOpenCallTab = { currentTab = SmartChatTab.CALL },
-                    onSignOut = onSignOut
+                    onSignOut = {
+                        viewModel.setOnlineState(false)
+                        onSignOut()
+                    }
                 )
             },
             bottomBar = {
@@ -174,35 +174,50 @@ fun SmartChatMainScreen(
                         tonalElevation = 0.dp
                     ) {
                         NavigationBarItem(
-                            selected = currentTab == SmartChatTab.CHAT,
-                            onClick = { currentTab = SmartChatTab.CHAT },
-                            icon = { Icon(Icons.Default.Chat, contentDescription = "গ্রুপ চ্যাট") },
-                            label = { Text("চ্যাট") },
+                            selected = currentTab == SmartChatTab.CHAT && activeDmPeer == null,
+                            onClick = {
+                                viewModel.openDirectMessage(null)
+                                currentTab = SmartChatTab.CHAT
+                            },
+                            icon = { Icon(Icons.Default.Chat, contentDescription = "গ্রুপ") },
+                            label = { Text("গ্রুপ", maxLines = 1) },
                             modifier = Modifier.testTag("nav_tab_chat")
                         )
                         NavigationBarItem(
-                            selected = currentTab == SmartChatTab.CALL,
-                            onClick = { currentTab = SmartChatTab.CALL },
-                            icon = { Icon(Icons.Default.Call, contentDescription = "ভয়েস কল") },
-                            label = {
-                                Text(
-                                    if (activeCalls.isNotEmpty()) "কল (${activeCalls.size})" else "ভয়েস কল"
-                                )
+                            selected = currentTab == SmartChatTab.INBOX || activeDmPeer != null,
+                            onClick = {
+                                viewModel.openDirectMessage(null)
+                                currentTab = SmartChatTab.INBOX
                             },
-                            modifier = Modifier.testTag("nav_tab_call")
+                            icon = { Icon(Icons.Default.Forum, contentDescription = "ইনবক্স") },
+                            label = { Text("ইনবক্স", maxLines = 1) },
+                            modifier = Modifier.testTag("nav_tab_inbox")
                         )
-                        NavigationBarItem(
-                            selected = currentTab == SmartChatTab.MEMBERS,
-                            onClick = { currentTab = SmartChatTab.MEMBERS },
-                            icon = { Icon(Icons.Default.Group, contentDescription = "মেম্বার ও অ্যাডমিন") },
-                            label = { Text(if (viewModel.isSuperAdmin) "অ্যাডমিন" else "মেম্বার") },
-                            modifier = Modifier.testTag("nav_tab_members")
-                        )
+                        if (viewModel.isSuperAdmin) {
+                            NavigationBarItem(
+                                selected = currentTab == SmartChatTab.MEMBERS,
+                                onClick = {
+                                    viewModel.openDirectMessage(null)
+                                    currentTab = SmartChatTab.MEMBERS
+                                },
+                                icon = {
+                                    Icon(
+                                        Icons.Default.AdminPanelSettings,
+                                        contentDescription = "অ্যাডমিন"
+                                    )
+                                },
+                                label = { Text("অ্যাডমিন", maxLines = 1) },
+                                modifier = Modifier.testTag("nav_tab_members")
+                            )
+                        }
                         NavigationBarItem(
                             selected = currentTab == SmartChatTab.PROFILE,
-                            onClick = { currentTab = SmartChatTab.PROFILE },
+                            onClick = {
+                                viewModel.openDirectMessage(null)
+                                currentTab = SmartChatTab.PROFILE
+                            },
                             icon = { Icon(Icons.Default.Person, contentDescription = "প্রোফাইল") },
-                            label = { Text("প্রোফাইল") },
+                            label = { Text("প্রোফাইল", maxLines = 1) },
                             modifier = Modifier.testTag("nav_tab_profile")
                         )
                     }
@@ -220,26 +235,45 @@ fun SmartChatMainScreen(
                         modifier = Modifier.fillMaxHeight()
                     ) {
                         NavigationRailItem(
-                            selected = currentTab == SmartChatTab.CHAT,
-                            onClick = { currentTab = SmartChatTab.CHAT },
-                            icon = { Icon(Icons.Default.Chat, contentDescription = "গ্রুপ চ্যাট") },
-                            label = { Text("চ্যাট") }
+                            selected = currentTab == SmartChatTab.CHAT && activeDmPeer == null,
+                            onClick = {
+                                viewModel.openDirectMessage(null)
+                                currentTab = SmartChatTab.CHAT
+                            },
+                            icon = { Icon(Icons.Default.Chat, contentDescription = "গ্রুপ") },
+                            label = { Text("গ্রুপ") }
                         )
                         NavigationRailItem(
-                            selected = currentTab == SmartChatTab.CALL,
-                            onClick = { currentTab = SmartChatTab.CALL },
-                            icon = { Icon(Icons.Default.Call, contentDescription = "ভয়েস কল") },
-                            label = { Text("ভয়েস কল") }
+                            selected = currentTab == SmartChatTab.INBOX || activeDmPeer != null,
+                            onClick = {
+                                viewModel.openDirectMessage(null)
+                                currentTab = SmartChatTab.INBOX
+                            },
+                            icon = { Icon(Icons.Default.Forum, contentDescription = "ইনবক্স") },
+                            label = { Text("ইনবক্স") }
                         )
-                        NavigationRailItem(
-                            selected = currentTab == SmartChatTab.MEMBERS,
-                            onClick = { currentTab = SmartChatTab.MEMBERS },
-                            icon = { Icon(Icons.Default.Group, contentDescription = "মেম্বার") },
-                            label = { Text("অ্যাডমিন/মেম্বার") }
-                        )
+                        if (viewModel.isSuperAdmin) {
+                            NavigationRailItem(
+                                selected = currentTab == SmartChatTab.MEMBERS,
+                                onClick = {
+                                    viewModel.openDirectMessage(null)
+                                    currentTab = SmartChatTab.MEMBERS
+                                },
+                                icon = {
+                                    Icon(
+                                        Icons.Default.AdminPanelSettings,
+                                        contentDescription = "অ্যাডমিন"
+                                    )
+                                },
+                                label = { Text("অ্যাডমিন") }
+                            )
+                        }
                         NavigationRailItem(
                             selected = currentTab == SmartChatTab.PROFILE,
-                            onClick = { currentTab = SmartChatTab.PROFILE },
+                            onClick = {
+                                viewModel.openDirectMessage(null)
+                                currentTab = SmartChatTab.PROFILE
+                            },
                             icon = { Icon(Icons.Default.Person, contentDescription = "প্রোফাইল") },
                             label = { Text("প্রোফাইল") }
                         )
@@ -251,61 +285,28 @@ fun SmartChatMainScreen(
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                                .padding(horizontal = 10.dp, vertical = 4.dp),
                             color = DangerRed.copy(alpha = 0.16f),
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(8.dp),
                             border = BorderStroke(1.dp, DangerRed)
                         ) {
                             Row(
-                                modifier = Modifier.padding(12.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Block,
-                                    contentDescription = "Blocked icon",
-                                    tint = DangerRed
+                                    contentDescription = "Blocked",
+                                    tint = DangerRed,
+                                    modifier = Modifier.size(16.dp)
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = "অ্যাডমিন আপনাকে চ্যাট এবং ভয়েস কল থেকে ব্লক করেছেন।",
+                                    text = "আপনি ব্লকড",
                                     color = DangerRed,
-                                    style = MaterialTheme.typography.bodySmall,
+                                    style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold
                                 )
-                            }
-                        }
-                    }
-
-                    if (primaryCall != null && currentTab != SmartChatTab.CALL) {
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 6.dp)
-                                .clickable { currentTab = SmartChatTab.CALL }
-                                .testTag("active_call_banner"),
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.Call,
-                                        contentDescription = "Active Call",
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = "লাইভ কল চলছে: ${primaryCall.callerName} (${primaryCall.participantCount} জন) — জয়েন করতে ট্যাপ করুন",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                                    )
-                                }
                             }
                         }
                     }
@@ -314,30 +315,30 @@ fun SmartChatMainScreen(
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 4.dp),
+                                .padding(horizontal = 10.dp, vertical = 4.dp),
                             color = MaterialTheme.colorScheme.secondaryContainer,
                             shape = RoundedCornerShape(8.dp),
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary)
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
                                     text = statusBanner!!,
-                                    style = MaterialTheme.typography.bodySmall,
+                                    style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                                     modifier = Modifier.weight(1f)
                                 )
                                 IconButton(
                                     onClick = { viewModel.clearBanner() },
-                                    modifier = Modifier.size(28.dp)
+                                    modifier = Modifier.size(24.dp)
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Close,
-                                        contentDescription = "Dismiss notification",
-                                        modifier = Modifier.size(16.dp)
+                                        contentDescription = "Close",
+                                        modifier = Modifier.size(14.dp)
                                     )
                                 }
                             }
@@ -349,8 +350,12 @@ fun SmartChatMainScreen(
                             currentUserId = viewModel.currentUserId,
                             currentUserProfile = currentUserProfile,
                             isSuperAdmin = viewModel.isSuperAdmin,
+                            groupSettings = groupSettings,
+                            activeDmPeer = activeDmPeer,
+                            members = members,
                             messagesState = messagesState,
                             replyingTo = replyingTo,
+                            editingMessage = editingMessage,
                             playingMessageId = playingMessageId,
                             hasMicPermission = hasMicPermission,
                             onRequestMicPermission = {
@@ -358,62 +363,65 @@ fun SmartChatMainScreen(
                             },
                             audioHelper = audioHelper,
                             onSendText = { text, isNotice ->
-                                viewModel.sendTextMessage(text, isNotice)
+                                viewModel.sendTextMessage(
+                                    text = text,
+                                    isAdminNotice = isNotice,
+                                    dmTargetUserId = activeDmPeer?.userId
+                                )
                             },
                             onSendVoice = { base64, durationSec ->
-                                viewModel.sendVoiceMessage(base64, durationSec)
+                                viewModel.sendVoiceMessage(
+                                    audioBase64 = base64,
+                                    durationSec = durationSec,
+                                    dmTargetUserId = activeDmPeer?.userId
+                                )
                             },
                             onSelectReply = { viewModel.setReplyTarget(it) },
+                            onStartEdit = { viewModel.startEditingMessage(it) },
+                            onToggleReaction = { msg, emoji ->
+                                viewModel.toggleReaction(msg, emoji)
+                            },
                             onDeleteMessage = { viewModel.deleteMessage(it) },
                             onSetPlayingId = { viewModel.setPlayingMessageId(it) },
-                            onStartGroupCall = {
-                                if (!hasMicPermission) {
-                                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                }
-                                viewModel.startVoiceCall()
-                                currentTab = SmartChatTab.CALL
+                            onOpenUserDm = { peer ->
+                                viewModel.openDirectMessage(peer)
+                                currentTab = SmartChatTab.CHAT
+                            },
+                            onCloseDm = {
+                                viewModel.openDirectMessage(null)
+                            },
+                            onTypingChanged = { roomKey ->
+                                viewModel.notifyTyping(roomKey)
                             }
                         )
 
-                        SmartChatTab.CALL -> VoiceCallLoungeSection(
+                        SmartChatTab.INBOX -> InboxAndSearchSection(
                             currentUserId = viewModel.currentUserId,
-                            currentUserProfile = currentUserProfile,
-                            activeCallsState = activeCallsState,
+                            groupSettings = groupSettings,
                             membersState = membersState,
-                            hasMicPermission = hasMicPermission,
-                            onRequestMicPermission = {
-                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            messagesState = messagesState,
+                            onOpenMainGroup = {
+                                viewModel.openDirectMessage(null)
+                                currentTab = SmartChatTab.CHAT
                             },
-                            audioHelper = audioHelper,
-                            onStartCall = { targetId, targetName ->
-                                if (!hasMicPermission) {
-                                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                }
-                                viewModel.startVoiceCall(targetId, targetName)
-                            },
-                            onJoinCall = {
-                                if (!hasMicPermission) {
-                                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                }
-                                viewModel.joinVoiceCall(it)
-                            },
-                            onTransmitVoiceChunk = { callId, base64, isCaller, showBanner ->
-                                viewModel.transmitLiveVoiceChunk(callId, base64, isCaller, showBanner)
-                            },
-                            onEndCall = { viewModel.endVoiceCall(it) }
+                            onOpenUserDm = { peer ->
+                                viewModel.openDirectMessage(peer)
+                                currentTab = SmartChatTab.CHAT
+                            }
                         )
 
                         SmartChatTab.MEMBERS -> MembersAndAdminSection(
                             currentUserId = viewModel.currentUserId,
                             isSuperAdmin = viewModel.isSuperAdmin,
+                            groupSettings = groupSettings,
                             membersState = membersState,
+                            onUpdateGroupSettings = { name, isOff ->
+                                viewModel.updateAdminGroupSettings(name, isOff)
+                            },
                             onToggleBlockUser = { viewModel.toggleBlockUser(it) },
-                            onCallMember = { member ->
-                                if (!hasMicPermission) {
-                                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                }
-                                viewModel.startVoiceCall(member.userId, "${member.username}-এর সাথে কল")
-                                currentTab = SmartChatTab.CALL
+                            onOpenUserDm = { peer ->
+                                viewModel.openDirectMessage(peer)
+                                currentTab = SmartChatTab.CHAT
                             },
                             onClearExpiredMessages = { deleteAll ->
                                 viewModel.runManualStorageCleanup(deleteAllAsAdmin = deleteAll)
@@ -429,7 +437,10 @@ fun SmartChatMainScreen(
                             onRunCleanup = { deleteAll ->
                                 viewModel.runManualStorageCleanup(deleteAllAsAdmin = deleteAll)
                             },
-                            onSignOut = onSignOut
+                            onSignOut = {
+                                viewModel.setOnlineState(false)
+                                onSignOut()
+                            }
                         )
                     }
                 }
@@ -441,13 +452,17 @@ fun SmartChatMainScreen(
 @Composable
 private fun FlatTopHeaderBar(
     currentUserProfile: UserProfile?,
+    groupSettings: GroupSettings,
+    onlineCount: Int,
     isSuperAdmin: Boolean,
-    activeCallCount: Int,
     isDarkTheme: Boolean,
     onToggleTheme: () -> Unit,
-    onOpenCallTab: () -> Unit,
     onSignOut: () -> Unit
 ) {
+    val vipInfo = remember(currentUserProfile, isSuperAdmin) {
+        (currentUserProfile ?: UserProfile()).computeVipInfo(isSuperAdmin)
+    }
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
@@ -458,7 +473,7 @@ private fun FlatTopHeaderBar(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -469,33 +484,33 @@ private fun FlatTopHeaderBar(
                     UserAvatarView(
                         avatarData = currentUserProfile?.avatarData ?: "avatar_emerald",
                         username = currentUserProfile?.username ?: "S",
-                        sizeDp = 40,
+                        sizeDp = 38,
                         isOnline = true
                     )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "SMART CHAT",
-                                style = MaterialTheme.typography.titleMedium,
+                                text = groupSettings.groupName,
+                                style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = MaterialTheme.colorScheme.primary,
                                 maxLines = 1,
-                                softWrap = false
+                                overflow = TextOverflow.Ellipsis
                             )
                             if (isSuperAdmin) {
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Box(
                                     modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
+                                        .clip(RoundedCornerShape(4.dp))
                                         .background(AdminGold.copy(alpha = 0.2f))
-                                        .border(1.dp, AdminGold, RoundedCornerShape(6.dp))
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        .border(1.dp, AdminGold, RoundedCornerShape(4.dp))
+                                        .padding(horizontal = 5.dp, vertical = 1.dp)
                                 ) {
                                     Text(
                                         text = "ADMIN",
                                         color = AdminGold,
-                                        style = MaterialTheme.typography.labelSmall,
+                                        fontSize = 9.sp,
                                         fontWeight = FontWeight.Bold,
                                         maxLines = 1,
                                         softWrap = false
@@ -503,44 +518,58 @@ private fun FlatTopHeaderBar(
                                 }
                             }
                         }
-                        Text(
-                            text = "${currentUserProfile?.username ?: "লোড হচ্ছে..."} • ২৪-৪৮ঘঃ অটো ক্লিন",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = currentUserProfile?.username ?: "...",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            VipBadgeChip(vipInfo = vipInfo)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "• Online $onlineCount",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = OnlineGreen,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
                     }
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        onClick = onOpenCallTab,
-                        modifier = Modifier.testTag("top_bar_call_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Call,
-                            contentDescription = "ভয়েস কল ট্যাব",
-                            tint = if (activeCallCount > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                        )
-                    }
+                // Uniform 36.dp Top Bar Icon Buttons
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     IconButton(
                         onClick = onToggleTheme,
-                        modifier = Modifier.testTag("toggle_theme_button")
+                        modifier = Modifier
+                            .size(36.dp)
+                            .testTag("toggle_theme_button")
                     ) {
                         Icon(
                             imageVector = if (isDarkTheme) Icons.Default.LightMode else Icons.Default.DarkMode,
-                            contentDescription = "থিম পরিবর্তন করুন"
+                            contentDescription = "Theme",
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                     IconButton(
                         onClick = onSignOut,
-                        modifier = Modifier.testTag("sign_out_button")
+                        modifier = Modifier
+                            .size(36.dp)
+                            .testTag("sign_out_button")
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.Logout,
-                            contentDescription = "লগআউট করুন",
-                            tint = DangerRed
+                            contentDescription = "Logout",
+                            tint = DangerRed,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }

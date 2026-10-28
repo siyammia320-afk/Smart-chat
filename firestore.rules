@@ -93,24 +93,8 @@ service cloud.firestore {
              data.audioDurationSec is int && data.audioDurationSec >= 0 && data.audioDurationSec <= 120 &&
              data.replyToId is string && data.replyToId.size() <= 128 &&
              data.replyToSender is string && data.replyToSender.size() <= 40 &&
-             data.replyToPreview is string && data.replyToPreview.size() <= 200 &&
+             data.replyToPreview is string && data.replyToPreview.size() <= 600 &&
              data.ttlHours is int && (data.ttlHours == 24 || data.ttlHours == 48) &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
-    }
-
-    function isValidVoiceCallSession(data) {
-      return isValidGroupId(data.groupId) &&
-             data.callerId is string && isValidId(data.callerId) &&
-             data.callerName is string && data.callerName.size() >= 1 && data.callerName.size() <= 40 &&
-             data.targetUserId is string && data.targetUserId.size() >= 1 && data.targetUserId.size() <= 128 &&
-             data.targetUserName is string && data.targetUserName.size() >= 1 && data.targetUserName.size() <= 40 &&
-             data.status is string && data.status.size() <= 16 && (data.status == 'ringing' || data.status == 'connected' || data.status == 'ended') &&
-             data.sdpOffer is string && data.sdpOffer.size() <= 20000 &&
-             data.sdpAnswer is string && data.sdpAnswer.size() <= 20000 &&
-             data.latestAudioChunk is string && data.latestAudioChunk.size() <= 60000 &&
-             data.latestAudioSpeakerId is string && data.latestAudioSpeakerId.size() <= 128 &&
-             data.participantCount is int && data.participantCount >= 0 && data.participantCount <= 50 &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }
@@ -248,18 +232,22 @@ service cloud.firestore {
                            request.auth.uid == existing().senderId &&
                            incoming().senderIsAdmin == existing().senderIsAdmin &&
                            incoming().type == existing().type &&
-                           incoming().diff(existing()).affectedKeys().hasOnly(['text', 'updatedAt']) &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['text', 'replyToPreview', 'updatedAt']) &&
                            hasActiveProfile()
                          ) ||
                          (
                            isSignedIn() &&
+                           hasActiveProfile() &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['replyToPreview', 'updatedAt'])
+                         ) ||
+                         (
+                           isSignedIn() &&
                            isAdmin() &&
-                           incoming().diff(existing()).affectedKeys().hasOnly(['text', 'type', 'updatedAt'])
+                           incoming().diff(existing()).affectedKeys().hasOnly(['text', 'type', 'replyToPreview', 'updatedAt'])
                          ) ||
                          (
                            existing().groupId == 'smart_chat_live' &&
-                           hasActiveEmailProfile(existing().senderId) &&
-                           incoming().diff(existing()).affectedKeys().hasOnly(['text', 'type', 'updatedAt'])
+                           incoming().diff(existing()).affectedKeys().hasOnly(['text', 'type', 'replyToPreview', 'updatedAt'])
                          )
                        );
 
@@ -269,72 +257,6 @@ service cloud.firestore {
                            existing().senderId == request.auth.uid ||
                            isAdmin() ||
                            request.time > existing().createdAt + duration.value(24, 'h')
-                         )
-                       ) ||
-                       existing().groupId == 'smart_chat_live'
-                     );
-    }
-
-    // 8. Collection Rules: /calls/{callId}
-    match /calls/{callId} {
-      allow get: if isValidId(callId) && (
-                    (isSignedIn() && existing().groupId == 'smart_chat_main') ||
-                    existing().groupId == 'smart_chat_live'
-                  );
-      allow list: if (isSignedIn() && existing().groupId == 'smart_chat_main') ||
-                     existing().groupId == 'smart_chat_live';
-
-      allow create: if isValidId(callId) &&
-                       incoming().keys().hasAll([
-                         'groupId', 'callerId', 'callerName', 'targetUserId', 'targetUserName',
-                         'status', 'sdpOffer', 'sdpAnswer', 'latestAudioChunk',
-                         'latestAudioSpeakerId', 'participantCount', 'createdAt', 'updatedAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'groupId', 'callerId', 'callerName', 'targetUserId', 'targetUserName',
-                         'status', 'sdpOffer', 'sdpAnswer', 'latestAudioChunk',
-                         'latestAudioSpeakerId', 'participantCount', 'createdAt', 'updatedAt'
-                       ]) &&
-                       isValidVoiceCallSession(incoming()) &&
-                       incoming().status != 'ended' && (
-                         (isSignedIn() && incoming().groupId == 'smart_chat_main' && incoming().callerId == request.auth.uid && hasActiveProfile()) ||
-                         (incoming().groupId == 'smart_chat_live' && hasActiveEmailProfile(incoming().callerId))
-                       );
-
-      allow update: if isValidId(callId) &&
-                       isValidVoiceCallSession(incoming()) &&
-                       incoming().callerId == existing().callerId &&
-                       incoming().groupId == existing().groupId &&
-                       incoming().createdAt == existing().createdAt && (
-                         (
-                           isSignedIn() &&
-                           existing().groupId == 'smart_chat_main' &&
-                           (existing().status != 'ended' || isAdmin()) && (
-                             (
-                               incoming().diff(existing()).affectedKeys().hasOnly([
-                                 'status', 'sdpOffer', 'sdpAnswer', 'latestAudioChunk',
-                                 'latestAudioSpeakerId', 'participantCount', 'updatedAt'
-                               ]) &&
-                               hasActiveProfile()
-                             ) ||
-                             isAdmin()
-                           )
-                         ) ||
-                         (
-                           existing().groupId == 'smart_chat_live' &&
-                           incoming().diff(existing()).affectedKeys().hasOnly([
-                             'status', 'sdpOffer', 'sdpAnswer', 'latestAudioChunk',
-                             'latestAudioSpeakerId', 'participantCount', 'updatedAt'
-                           ])
-                         )
-                       );
-
-      allow delete: if isValidId(callId) && (
-                       (
-                         isSignedIn() && (
-                           existing().callerId == request.auth.uid ||
-                           isAdmin() ||
-                           existing().status == 'ended'
                          )
                        ) ||
                        existing().groupId == 'smart_chat_live'
