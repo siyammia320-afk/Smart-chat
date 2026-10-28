@@ -77,6 +77,7 @@ import com.example.ui.theme.DangerRed
 import com.example.ui.viewmodel.UiState
 import com.example.util.AudioHelper
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 @Composable
 fun VoiceCallLoungeSection(
@@ -89,17 +90,24 @@ fun VoiceCallLoungeSection(
     audioHelper: AudioHelper,
     onStartCall: (String, String) -> Unit,
     onJoinCall: (VoiceCallSession) -> Unit,
-    onTransmitVoiceChunk: (String, String) -> Unit,
+    onTransmitVoiceChunk: (String, String, Boolean, Boolean) -> Unit,
     onEndCall: (String) -> Unit
 ) {
     var isSpeakerOn by rememberSaveable { mutableStateOf(true) }
     var isMicMuted by rememberSaveable { mutableStateOf(false) }
     var isTransmittingPtt by remember { mutableStateOf(false) }
+    var liveChunksSent by remember { mutableIntStateOf(0) }
     var callSeconds by remember { mutableIntStateOf(0) }
 
     val activeCalls = (activeCallsState as? UiState.Success)?.data ?: emptyList()
     val currentCall = activeCalls.firstOrNull()
     val members = (membersState as? UiState.Success)?.data ?: emptyList()
+
+    LaunchedEffect(currentCall?.id) {
+        if (currentCall != null && !hasMicPermission) {
+            onRequestMicPermission()
+        }
+    }
 
     LaunchedEffect(currentCall?.id, isSpeakerOn, isMicMuted) {
         if (currentCall != null) {
@@ -109,8 +117,26 @@ fun VoiceCallLoungeSection(
         }
     }
 
+    LaunchedEffect(currentCall?.id, hasMicPermission, isMicMuted, isTransmittingPtt) {
+        val activeCall = currentCall ?: return@LaunchedEffect
+        if (!hasMicPermission || isMicMuted || isTransmittingPtt) return@LaunchedEffect
+        val isCaller = activeCall.callerId == currentUserId
+        while (isActive && currentCall != null && hasMicPermission && !isMicMuted && !isTransmittingPtt) {
+            val sliceBase64 = audioHelper.recordLiveCallSlice(
+                durationMs = 1400L,
+                requireVoiceActivity = true
+            )
+            if (!sliceBase64.isNullOrBlank() && isActive && !isMicMuted && !isTransmittingPtt) {
+                liveChunksSent++
+                onTransmitVoiceChunk(activeCall.id, sliceBase64, isCaller, false)
+            }
+            delay(80L)
+        }
+    }
+
     LaunchedEffect(currentCall?.id) {
         callSeconds = 0
+        liveChunksSent = 0
         while (currentCall != null) {
             delay(1000L)
             callSeconds++
@@ -125,6 +151,7 @@ fun VoiceCallLoungeSection(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         if (currentCall != null) {
+            val isCaller = currentCall.callerId == currentUserId
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -207,13 +234,26 @@ fun VoiceCallLoungeSection(
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
-                                text = "লাইভ ভয়েস ট্রান্সমিটার (Live Voice Relay)",
+                                text = when {
+                                    !hasMicPermission -> "মাইক্রোফোন পারমিশন প্রয়োজন"
+                                    isMicMuted -> "মাইক্রোফোন মিউট করা আছে"
+                                    else -> "লাইভ ভয়েস চালু আছে • সরাসরি কথা বলুন"
+                                },
                                 style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                color = if (hasMicPermission && !isMicMuted) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "বাটনে ট্যাপ করে কথা বলুন এবং আবার ট্যাপ করে পাঠান—কলে থাকা সবার ফোনে সাথে সাথে বাজবে!",
+                                text = if (hasMicPermission && !isMicMuted) {
+                                    "আপনার কথা স্বয়ংক্রিয়ভাবে অপর প্রান্তে যাচ্ছে (প্যাকেট পাঠানো হয়েছে: $liveChunksSent)। চাইলে নিচের বাটনে ট্যাপ করেও ভয়েস পাঠাতে পারেন।"
+                                } else {
+                                    "কলে কথা বলার জন্য মাইক্রোফোন চালু রাখুন অথবা নিচের বাটনে ট্যাপ করুন।"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -231,7 +271,8 @@ fun VoiceCallLoungeSection(
                                         isTransmittingPtt = false
                                         val encoded = audioHelper.stopRecordingAndEncode()
                                         if (encoded != null) {
-                                            onTransmitVoiceChunk(currentCall.id, encoded.first)
+                                            liveChunksSent++
+                                            onTransmitVoiceChunk(currentCall.id, encoded.first, isCaller, true)
                                         }
                                     }
                                 },
@@ -250,7 +291,11 @@ fun VoiceCallLoungeSection(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = if (isTransmittingPtt) "কথা বলা শেষ হলে পাঠান" else "কলে কথা বলুন (Tap to Speak)",
+                                    text = when {
+                                        !hasMicPermission -> "মাইক্রোফোন পারমিশন দিন"
+                                        isTransmittingPtt -> "কথা বলা শেষ হলে পাঠান"
+                                        else -> "অথবা ট্যাপ করে ভয়েস পাঠান (Push-to-Talk)"
+                                    },
                                     fontWeight = FontWeight.Bold
                                 )
                             }

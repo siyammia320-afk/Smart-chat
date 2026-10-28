@@ -278,11 +278,18 @@ class SmartChatViewModel(
         }
     }
 
-    fun transmitLiveVoiceChunk(callId: String, audioBase64: String) {
+    fun transmitLiveVoiceChunk(
+        callId: String,
+        audioBase64: String,
+        isCaller: Boolean = false,
+        showBanner: Boolean = false
+    ) {
         viewModelScope.launch {
-            repository.transmitAudioChunk(callId, audioBase64)
+            repository.transmitAudioChunk(callId, audioBase64, isCaller)
                 .onSuccess {
-                    _statusBanner.value = "লাইভ ভয়েস অডিও কলের সবাইকে পাঠানো হয়েছে!"
+                    if (showBanner) {
+                        _statusBanner.value = "লাইভ ভয়েস অডিও কলের সবাইকে পাঠানো হয়েছে!"
+                    }
                 }
         }
     }

@@ -613,16 +613,29 @@ class SmartChatRepository(
         }
     }
 
-    suspend fun transmitAudioChunk(callId: String, audioBase64: String): Result<Unit> {
+    suspend fun transmitAudioChunk(
+        callId: String,
+        audioBase64: String,
+        isCaller: Boolean = false
+    ): Result<Unit> {
         val uid = requireUserId()
         val docRef = db.collection("calls").document(callId)
+        val chunkId = UUID.randomUUID().toString().replace("-", "").take(10)
+        val packed = "$chunkId|$uid|${audioBase64.take(55000)}"
         return try {
-            val payload = mapOf(
+            val payload = mutableMapOf<String, Any>(
                 "status" to "connected",
-                "latestAudioChunk" to audioBase64.take(60000),
+                "latestAudioChunk" to packed.take(60000),
                 "latestAudioSpeakerId" to uid,
                 "updatedAt" to FieldValue.serverTimestamp()
             )
+            if (packed.length <= 19500) {
+                if (isCaller) {
+                    payload["sdpOffer"] = packed
+                } else {
+                    payload["sdpAnswer"] = packed
+                }
+            }
             docRef.update(payload).await()
             Result.success(Unit)
         } catch (e: CancellationException) {

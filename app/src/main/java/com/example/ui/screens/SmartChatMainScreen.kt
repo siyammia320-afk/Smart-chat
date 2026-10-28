@@ -129,23 +129,18 @@ fun SmartChatMainScreen(
         currentTab = SmartChatTab.CHAT
     }
 
-    var lastPlayedCallTimestamp by remember { mutableLongStateOf(0L) }
     val activeCalls = (activeCallsState as? UiState.Success)?.data ?: emptyList()
     val primaryCall = activeCalls.firstOrNull()
 
-    LaunchedEffect(primaryCall?.updatedAt?.seconds, primaryCall?.latestAudioChunk) {
+    LaunchedEffect(primaryCall?.latestAudioChunk, primaryCall?.sdpOffer, primaryCall?.sdpAnswer) {
         val call = primaryCall ?: return@LaunchedEffect
-        val sec = call.updatedAt?.seconds ?: 0L
-        if (call.latestAudioChunk.isNotBlank() &&
-            call.latestAudioSpeakerId != viewModel.currentUserId &&
-            sec > lastPlayedCallTimestamp
-        ) {
-            lastPlayedCallTimestamp = sec
-            audioHelper.playBase64Audio(
-                audioBase64 = call.latestAudioChunk,
-                onCompletion = {},
-                onError = {}
-            )
+        val myId = viewModel.currentUserId
+        audioHelper.handleIncomingCallPacket(call.latestAudioChunk, myId, call.latestAudioSpeakerId)
+        if (call.sdpOffer.contains("|")) {
+            audioHelper.handleIncomingCallPacket(call.sdpOffer, myId)
+        }
+        if (call.sdpAnswer.contains("|")) {
+            audioHelper.handleIncomingCallPacket(call.sdpAnswer, myId)
         }
     }
 
@@ -372,6 +367,9 @@ fun SmartChatMainScreen(
                             onDeleteMessage = { viewModel.deleteMessage(it) },
                             onSetPlayingId = { viewModel.setPlayingMessageId(it) },
                             onStartGroupCall = {
+                                if (!hasMicPermission) {
+                                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
                                 viewModel.startVoiceCall()
                                 currentTab = SmartChatTab.CALL
                             }
@@ -388,11 +386,19 @@ fun SmartChatMainScreen(
                             },
                             audioHelper = audioHelper,
                             onStartCall = { targetId, targetName ->
+                                if (!hasMicPermission) {
+                                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
                                 viewModel.startVoiceCall(targetId, targetName)
                             },
-                            onJoinCall = { viewModel.joinVoiceCall(it) },
-                            onTransmitVoiceChunk = { callId, base64 ->
-                                viewModel.transmitLiveVoiceChunk(callId, base64)
+                            onJoinCall = {
+                                if (!hasMicPermission) {
+                                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
+                                viewModel.joinVoiceCall(it)
+                            },
+                            onTransmitVoiceChunk = { callId, base64, isCaller, showBanner ->
+                                viewModel.transmitLiveVoiceChunk(callId, base64, isCaller, showBanner)
                             },
                             onEndCall = { viewModel.endVoiceCall(it) }
                         )
@@ -403,6 +409,9 @@ fun SmartChatMainScreen(
                             membersState = membersState,
                             onToggleBlockUser = { viewModel.toggleBlockUser(it) },
                             onCallMember = { member ->
+                                if (!hasMicPermission) {
+                                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                }
                                 viewModel.startVoiceCall(member.userId, "${member.username}-এর সাথে কল")
                                 currentTab = SmartChatTab.CALL
                             },
